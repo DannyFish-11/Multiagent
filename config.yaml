@@ -7,7 +7,24 @@ hardware:
   # 本容器检测结果:无 GPU / 15GB RAM → 低于任何档位,模型服务须在目标机器上运行。
   tier: unset
 
-llm:  # L0 — vLLM OpenAI 兼容端点
+llm:  # L0
+  # mode=local:vLLM 本地路径(PHASE 1);mode=api:外部 OpenAI 兼容 API(PHASE2.5)
+  # 一键切回本地:MEMORY_AGENT_LLM__MODE=local
+  mode: local
+  # ---- API 模式(PHASE2.5 M-A):chat / memory 双角色,可同端点也可分开 ----
+  chat:
+    base_url: ""          # 停点:供应商/模型/key 由人类指定(.env 注入)
+    api_key: ""
+    model: ""
+    fallbacks: []         # [{base_url, api_key, model}] 主端点连续失败后切换
+    failover_threshold: 3
+    max_retries: 3
+    timeout_s: 120
+  memory:                 # 记忆抽取/整合专用;留空回落 chat
+    base_url: ""
+    api_key: ""
+    model: ""
+  # ---- 本地模式(PHASE 1 保留) ----
   base_url: http://localhost:8000/v1
   model: gemma-4
   # 各档位实际拉起的 HF 模型名(download_models.py / docker-compose 使用):
@@ -60,11 +77,102 @@ services:
   api_host: 0.0.0.0
   api_port: 8002
 
+# ---------------- PHASE 5 ----------------
+
+cloud:  # M17 云端底座(供应商与机型由人类选定,停点)
+  provider: local          # generic_rest | local | none
+  base_url: ""
+  machine_type: ""
+  region: ""
+  image_id: ""
+  upload_base_url: ""      # 对象存储数据包上传前缀
+
+conductor:  # M17/M18 队列 + 双层熔断
+  state_path: ./data/conductor_state.json
+  max_concurrent_vms: 2
+  breaker_state_path: ./data/global_breaker.json
+  global_daily_usd: 50.0
+  global_monthly_usd: 500.0
+  single_experiment_max_ratio: 0.5   # 单实验不得占全局日额度 > 50%
+  pause_wait_timeout_s: 86400         # 层一暂停后等待人类 24h
+
+# ---------------- PHASE 4 ----------------
+
+loops:  # M14.1 循环硬上限(触顶记 loop_capped,非静默停)
+  default_max_iterations: 8
+  per_point: {}          # 如 {vote_rounds: 3, delegation_chain: 5}
+
+vote:   # M15.1 VotePolicy 裁决规则
+  rule: simple_majority  # simple_majority | supermajority | weighted
+  supermajority_ratio: 0.66
+  max_rounds: 3
+
+experiment:  # M14.2 实验运行器
+  dir: ./experiments
+  snapshot_dir: ./experiments/snapshots
+
+# ---------------- PHASE 3 ----------------
+
+concurrency:  # M9.1
+  max_concurrent_sessions: 32
+  max_concurrent_llm_calls: 8    # 信号量,防 API 限流雪崩
+
+approval:  # M9.2 审批中枢(无 Omnigent 形态的危险动作守门人)
+  timeout_s: 300
+  audit_path: ./logs/audit.jsonl
+  notify: none                   # none | webhook | email
+  webhook_url: ""
+  default_level: confirm         # 无规则命中时保守 confirm
+  # 声明式分级:action(fnmatch) × when(参数谓词)→ auto|confirm|deny,首条命中生效
+  policies:
+    - {action: "web_search",  when: {}, level: auto}
+    - {action: "web_fetch",   when: {}, level: auto}
+    - {action: "web_submit",  when: {}, level: confirm, reason: "表单提交需确认"}
+    - {action: "web_download",when: {}, level: confirm, reason: "下载执行件需确认"}
+    - {action: "gmail_read",  when: {}, level: auto}
+    - {action: "gmail_search",when: {}, level: auto}
+    - {action: "gmail_draft", when: {}, level: auto}
+    - {action: "gmail_send",  when: {}, level: confirm, reason: "发信需确认"}
+    - {action: "gmail_delete",when: {}, level: confirm, reason: "删信需确认"}
+    - {action: "gmail_archive",when: {}, level: confirm}
+    - {action: "payment", when: {amount_usd__gte: 1.0}, level: confirm, reason: "≥$1 需确认"}
+    - {action: "payment", when: {}, level: auto}
+
+web:  # M10 上网(供应商与 key 由人类指定 → .env)
+  search_provider: none          # tavily | serper | none
+  search_api_key: ""
+  fetch_timeout_s: 30
+  fetch_max_bytes: 2000000
+  domain_blacklist: []
+  domain_whitelist: []           # 非空则白名单模式
+
+gmail_poll:  # M11 收件驱动(默认关)
+  enabled: false
+  interval_s: 30
+  label: agent-inbox
+
+payments:  # M12 支付笼子(enabled=false 时维持附录 A 默认拒付)
+  enabled: false
+  provider: none                 # virtual_card | x402 | none
+  provider_base_url: ""
+  per_tx_usd: 10.0
+  daily_usd: 20.0
+  monthly_usd: 100.0
+  confirm_threshold_usd: 1.0
+  whitelist_enabled: false
+  payee_whitelist: []
+  ledger_path: ./data/payments_ledger.json
+
 agent:
   top_k: 5
   system_prompt: |
     你是一个拥有长期记忆的助手。下面的「相关记忆」是你从过往交互中检索到的内容,
     回答时优先利用这些记忆;若记忆与问题无关则忽略。
+
+budget:  # PHASE2.5 M-A 成本护栏(adapter 层,不依赖 Omnigent 在场)
+  daily_usd: 5.0
+  ledger_path: ./data/cost_ledger.json
+  prices: {}   # 每百万 token 美元:{model: {input: x, output: y}};未配价按 0 记并标注 unpriced
 
 # ---------------- PHASE 2 ----------------
 

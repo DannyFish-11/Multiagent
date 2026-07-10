@@ -1,22 +1,73 @@
-# Docker Compose v2。qdrant 常驻;vllm 需 GPU,归入 gpu profile:
-#   make up            -> 只起 qdrant
-#   make up-gpu        -> qdrant + vllm(目标机器,档位经人类确认后)
-# vLLM 模型经环境变量 VLLM_MODEL 传入(取 config.yaml llm.model_by_tier 对应档位值)。
+# PHASE2.5 M-C:docker compose up -d 后系统完整可用(无 GPU 依赖)。
+# 服务清单三个:qdrant / memory-api / mcp-server(同镜像不同入口,理由见 README)。
+# 密钥全部经 .env 注入(模板 .env.example);数据/日志/导出挂 volume。
+#
+# 本地推理路径保留:--profile gpu 追加 vllm(PHASE 1 形态,一键切回
+# MEMORY_AGENT_LLM__MODE=local)。
 
 services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
     ports:
       - "6333:6333"
-      - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ./data/qdrant:/qdrant/storage
     healthcheck:
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
 
+  memory-api:
+    build: .
+    image: memory-agent:latest
+    env_file:
+      - .env
+    environment:
+      MEMORY_AGENT_VECTORDB__URL: http://qdrant:6333
+      MEMORY_AGENT_BUDGET__LEDGER_PATH: /app/data/cost_ledger.json
+      MEMORY_AGENT_IDENTITY__DIR: /app/data/identity
+      MEMORY_AGENT_METABOLISM__EVENTS_PATH: /app/logs/retrieval_events.jsonl
+      MEMORY_AGENT_METABOLISM__REPORT_DIR: /app/reports
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data/agent:/app/data
+      - ./logs:/app/logs
+      - ./exports:/app/exports
+      - ./reports:/app/reports
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    # /healthz 逐项报告 LLM 端点、嵌入端点、Qdrant 三依赖(镜像内置 HEALTHCHECK)
+
+  # MCP server:同一镜像、不同入口(stdio 按需拉起,不常驻端口)
+  # 用法:docker compose --profile mcp run --rm mcp-server
+  # 与 memory-api 经同一 Qdrant collection 共享记忆状态
+  mcp-server:
+    image: memory-agent:latest
+    profiles: ["mcp"]
+    env_file:
+      - .env
+    environment:
+      MEMORY_AGENT_VECTORDB__URL: http://qdrant:6333
+      MEMORY_AGENT_BUDGET__LEDGER_PATH: /app/data/cost_ledger.json
+      MEMORY_AGENT_IDENTITY__DIR: /app/data/identity
+    volumes:
+      - ./data/agent:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    stdin_open: true
+    command: ["python", "-m", "services.mcp_server"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import services.mcp_server"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---- 本地推理路径(PHASE 1 保留,一键切回) ----
   vllm:
     image: vllm/vllm-openai:latest
     profiles: ["gpu"]
@@ -44,5 +95,4 @@ services:
       retries: 60
 
 volumes:
-  qdrant_data:
   hf_cache:

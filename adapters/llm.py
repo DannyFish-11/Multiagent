@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
 from core.errors import LayerError
 from core.schemas import Message
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -70,3 +73,190 @@ class VLLMOpenAIAdapter:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+# ---------------------------------------------------------------- PHASE2.5 M-A
+
+class OpenAICompatAdapter:
+    """外部 OpenAI 兼容 API 适配器(多模态,含重试/备用端点/成本护栏)。
+
+    - 端点三元组(base_url/api_key/model)全部来自 config/环境变量
+    - 多模态输入:Message.content 允许 OpenAI parts 列表(text + image_url),
+      与 MemoryAgent 构造的负载直接兼容
+    - 单端点指数退避重试(max_retries);主端点连续失败 failover_threshold 次
+      后切换到 fallbacks 中的下一个端点,切换写日志并在 last_meta 标注
+      (LLMClient 协议返回 str,响应元数据经 adapter.last_meta 暴露)
+    - 每次成功调用把 usage 记入 CostLedger;预算超限在发请求前拒绝
+    """
+
+    def __init__(self, role, ledger=None,
+                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+        # role: core.config.LLMRoleSettings(鸭子类型,避免无谓的运行时依赖)
+        endpoints = [
+            {"base_url": role.base_url, "api_key": role.api_key, "model": role.model},
+            *[{"base_url": f.base_url, "api_key": f.api_key, "model": f.model}
+              for f in role.fallbacks],
+        ]
+        if not endpoints[0]["base_url"]:
+            raise LayerError("L0", "openai-compat", "llm 角色未配置 base_url(停点:API 供应商与模型由人类指定)")
+        self._endpoints = endpoints
+        self._active = 0
+        self._consecutive_failures = 0
+        self._failover_threshold = max(1, role.failover_threshold)
+        self._max_retries = max(0, role.max_retries)
+        self._backoff_s = role.retry_backoff_s
+        self._timeout_s = role.timeout_s
+        self._ledger = ledger
+        self._transport = transport
+        self._clients: dict[int, httpx.AsyncClient] = {}
+        self.last_meta: dict[str, Any] = {}
+
+    @property
+    def model(self) -> str:
+        return self._endpoints[self._active]["model"]
+
+    @property
+    def active_endpoint(self) -> str:
+        return self._endpoints[self._active]["base_url"]
+
+    def _client(self, idx: int) -> httpx.AsyncClient:
+        if idx not in self._clients:
+            ep = self._endpoints[idx]
+            self._clients[idx] = httpx.AsyncClient(
+                base_url=ep["base_url"].rstrip("/"),
+                headers={"Authorization": f"Bearer {ep['api_key'] or 'EMPTY'}"},
+                timeout=self._timeout_s,
+                transport=self._transport,
+            )
+        return self._clients[idx]
+
+    async def _post_once(self, idx: int, payload: dict[str, Any]) -> dict[str, Any]:
+        resp = await self._client(idx).post("/chat/completions", json=payload)
+        if resp.status_code != 200:
+            raise LayerError("L0", "openai-compat",
+                             f"HTTP {resp.status_code} @ {self._endpoints[idx]['base_url']}: "
+                             f"{resp.text[:300]}")
+        return resp.json()
+
+    async def _post_with_retry(self, idx: int, payload: dict[str, Any]) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                return await self._post_once(idx, payload)
+            except (httpx.HTTPError, LayerError) as exc:
+                last_exc = exc
+                if attempt < self._max_retries and self._backoff_s > 0:
+                    await _asyncio.sleep(self._backoff_s * (2 ** attempt))
+        raise last_exc  # type: ignore[misc]
+
+    async def chat(self, messages: list[Message], **kw: Any) -> str:
+        if self._ledger is not None:
+            self._ledger.check_budget()  # 预算闸门:超限直接拒绝
+
+        start_idx = self._active
+        for offset in range(len(self._endpoints)):
+            idx = (start_idx + offset) % len(self._endpoints)
+            ep = self._endpoints[idx]
+            payload: dict[str, Any] = {
+                "model": ep["model"],
+                "messages": [m.model_dump() for m in messages],
+            }
+            payload.update(kw)
+            try:
+                data = await self._post_with_retry(idx, payload)
+            except (httpx.HTTPError, LayerError) as exc:
+                self._consecutive_failures += 1
+                logger.warning("LLM 端点失败 %s(连续第 %d 次): %s",
+                               ep["base_url"], self._consecutive_failures, exc)
+                if (self._consecutive_failures >= self._failover_threshold
+                        and offset < len(self._endpoints) - 1):
+                    nxt = self._endpoints[(idx + 1) % len(self._endpoints)]
+                    logger.warning("failover:%s → %s", ep["base_url"], nxt["base_url"])
+                    self._consecutive_failures = 0
+                    continue
+                raise LayerError("L0", "openai-compat",
+                                 f"全部端点耗尽,最后错误: {exc}") from exc
+
+            self._consecutive_failures = 0
+            failover_happened = idx != start_idx
+            if failover_happened:
+                self._active = idx  # 粘住可用端点
+            usage = data.get("usage") or {}
+            if self._ledger is not None and usage:
+                self._ledger.record(ep["base_url"], ep["model"],
+                                    int(usage.get("prompt_tokens", 0)),
+                                    int(usage.get("completion_tokens", 0)))
+            self.last_meta = {
+                "endpoint": ep["base_url"], "model": ep["model"],
+                "usage": usage, "failover": failover_happened,
+            }
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError) as exc:
+                raise LayerError("L0", "openai-compat", f"响应结构异常: {data}") from exc
+            if content is None:
+                raise LayerError("L0", "openai-compat", f"空回复: {data}")
+            return content
+        raise LayerError("L0", "openai-compat", "没有可用端点")
+
+    async def health(self) -> bool:
+        try:
+            resp = await self._client(self._active).get("/models")
+        except httpx.HTTPError as exc:
+            raise LayerError("L0", "openai-compat",
+                             f"健康检查失败 {self.active_endpoint}: {exc}") from exc
+        if resp.status_code >= 500:
+            raise LayerError("L0", "openai-compat", f"健康检查 HTTP {resp.status_code}")
+        return True
+
+    async def aclose(self) -> None:
+        for client in self._clients.values():
+            await client.aclose()
+
+
+def build_llm_client(config, role: str = "chat", ledger=None):
+    """按 config 装配 LLM 客户端(adapter 层工厂,core/services 只调用不选型)。
+
+    mode=local → VLLMOpenAIAdapter(PHASE 1 路径,一键切回)
+    mode=api   → OpenAICompatAdapter(chat / memory 双角色可分开配置)
+    """
+    if config.llm.mode == "api":
+        role_cfg = config.llm.memory if role == "memory" else config.llm.chat
+        # memory 角色未配置时回落到 chat 角色(允许同一端点)
+        if role == "memory" and not role_cfg.base_url:
+            role_cfg = config.llm.chat
+        return OpenAICompatAdapter(role_cfg, ledger=ledger)
+    return VLLMOpenAIAdapter(
+        base_url=config.llm.base_url, model=config.llm.model,
+        api_key=config.llm.api_key, timeout_s=config.llm.timeout_s,
+    )
+
+
+def build_ledger(config):
+    """CostLedger 单例构造(LLM 与嵌入共用)。"""
+    from adapters.cost_ledger import CostLedger
+
+    return CostLedger(config.budget.prices, config.budget.daily_usd,
+                      config.budget.ledger_path)
+
+
+class ConcurrencyLimitedLLM:
+    """LLMClient 装饰器(M9.1):信号量限制并发 LLM 调用,防 API 限流雪崩。
+
+    包裹任意 LLMClient;不改被包裹者签名(adapter 红线:core 只见 LLMClient 协议)。
+    """
+
+    def __init__(self, inner, max_concurrent: int) -> None:
+        import asyncio as _asyncio
+
+        self._inner = inner
+        self._sem = _asyncio.Semaphore(max(1, max_concurrent))
+
+    async def chat(self, messages, **kw):
+        async with self._sem:
+            return await self._inner.chat(messages, **kw)
+
+    def __getattr__(self, name):  # 透传 health / aclose / model / last_meta 等
+        return getattr(self._inner, name)

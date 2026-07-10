@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from adapters.embedder import Embedder, build_embedder
-from adapters.llm import LLMClient, VLLMOpenAIAdapter
+from adapters.llm import LLMClient, build_ledger, build_llm_client
 from adapters.memory import MemoryStore, QdrantMemoryStore, SimpleMemAdapter
 from adapters.vectordb import QdrantAdapter
 from core.agent import MemoryAgent
@@ -19,13 +19,20 @@ def get_config() -> AppConfig:
     return _singletons["config"]  # type: ignore[return-value]
 
 
-def build_llm(config: AppConfig) -> LLMClient:
-    return VLLMOpenAIAdapter(
-        base_url=config.llm.base_url,
-        model=config.llm.model,
-        api_key=config.llm.api_key,
-        timeout_s=config.llm.timeout_s,
-    )
+def get_ledger(config: AppConfig):
+    """CostLedger 进程级单例(LLM 与嵌入 API 共用一本账)。"""
+    if "ledger" not in _singletons:
+        _singletons["ledger"] = build_ledger(config)
+    return _singletons["ledger"]
+
+
+def build_llm(config: AppConfig, role: str = "chat") -> LLMClient:
+    """选型逻辑在 adapters.llm.build_llm_client(mode=local|api,双角色);
+    外层套并发信号量(M9.1 防 API 限流雪崩)。"""
+    from adapters.llm import ConcurrencyLimitedLLM
+
+    inner = build_llm_client(config, role=role, ledger=get_ledger(config))
+    return ConcurrencyLimitedLLM(inner, config.concurrency.max_concurrent_llm_calls)
 
 
 def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
@@ -33,8 +40,8 @@ def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
     if config.memory.backend == "simplemem":
         return SimpleMemAdapter(config)
     if config.memory.backend == "qdrant":
-        embedder = embedder or build_embedder(config.embedder)
-        llm = llm or build_llm(config)
+        embedder = embedder or build_embedder(config.embedder, ledger=get_ledger(config))
+        llm = llm or build_llm(config, role="memory")
         db = QdrantAdapter(config.vectordb, dim=config.embedder.effective_dim)
         shared_db = QdrantAdapter(
             config.vectordb, dim=config.embedder.effective_dim,

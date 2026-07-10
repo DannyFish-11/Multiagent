@@ -29,6 +29,7 @@ class MemoryAgent:
         self._memory = memory
         self._config = config
         self._pending: set[asyncio.Task] = set()
+        self.last_write_error = False  # 后台写失败的可观测标记(healthz/测试用)
         # M8 埋点:检索事件日志(可选注入;None 时不记录)
         self._retrieval_logger = None
 
@@ -53,6 +54,15 @@ class MemoryAgent:
         except Exception:
             logger.exception("memory write failed (session=%s)", session_id)
             raise
+
+    async def _background_write(self, user_message: str, session_id: str,
+                                image: MultimodalInput | None) -> None:
+        """后台路径:异常已在 _write_memories 记录,此处吞掉,避免
+        "Task exception was never retrieved" 且不让单次写失败拖垮事件循环。"""
+        try:
+            await self._write_memories(user_message, session_id, image)
+        except Exception:
+            self.last_write_error = True
 
     async def chat(
         self,
@@ -84,11 +94,10 @@ class MemoryAgent:
             Message(role="user", content=user_content),
         ])
 
-        write = self._write_memories(message, session_id, image)
         if sync_memory_write:
-            await write
+            await self._write_memories(message, session_id, image)
         else:
-            task = asyncio.create_task(write)
+            task = asyncio.create_task(self._background_write(message, session_id, image))
             self._pending.add(task)
             task.add_done_callback(self._pending.discard)
 

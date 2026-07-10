@@ -223,10 +223,17 @@ class A2AServerAdapter:
 # ---------------------------------------------------------------- 客户端
 
 class A2AClientAdapter:
-    """A2A Client:读取并验签他人 Agent Card,发起任务委托。"""
+    """A2A Client:读取并验签他人 Agent Card,发起任务委托。
 
-    def __init__(self, identity: AgentIdentity) -> None:
+    M14.1 委托上下文预算:context_budget_tokens 限制委托任务上下文大小
+    (超预算时用 LLM 摘要压缩)。预算值是实验变量,不只是省钱开关。
+    """
+
+    def __init__(self, identity: AgentIdentity, llm=None,
+                 context_budget_tokens: int = 0) -> None:
         self._identity = identity
+        self._llm = llm  # 压缩用;None 时退化为字符截断
+        self._context_budget = context_budget_tokens
 
     async def fetch_and_verify_card(self, base_url: str, transport=None) -> dict[str, Any]:
         """经 HTTP 获取对方 signed card(自有 JSON 端点或 A2A well-known)并验签。"""
@@ -240,6 +247,26 @@ class A2AClientAdapter:
         if not verify_signed_card(signed_card):
             raise LayerError("L5", "a2a-client", f"Agent Card 验签失败: {base_url}")
         return signed_card
+
+    async def compress_context(self, text: str) -> str:
+        """把委托上下文压缩到 context_budget_tokens 预算内(近似:4 字符≈1 token)。
+
+        有 LLM 时用摘要;无 LLM 时退化为截断。budget<=0 表示不限。"""
+        if self._context_budget <= 0:
+            return text
+        budget_chars = self._context_budget * 4
+        if len(text) <= budget_chars:
+            return text
+        if self._llm is not None:
+            from core.schemas import Message
+
+            summary = await self._llm.chat([
+                Message(role="system",
+                        content=f"把以下委托任务上下文压缩到约 {self._context_budget} token 内,"
+                                "保留关键事实与意图,输出压缩后的文本。"),
+                Message(role="user", content=text)])
+            return summary[:budget_chars]
+        return text[:budget_chars]
 
     def build_delegation(self, skill: str, params: dict[str, Any]) -> dict[str, Any]:
         """构造带本方签名的委托消息体。"""

@@ -7,3 +7,4 @@ omni_memory_data/
 *.egg-info/
 dist/
 .upstream/
+.env

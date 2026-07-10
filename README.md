@@ -10,7 +10,58 @@
 | L3 组合 | 本项目 Memory-Agent | FastAPI `:8002` + MCP server |
 | L4 治理 | Omnigent 0.4.0 | `omnigent/memory-agent` bundle |
 
-## 快速开始(目标机器)
+## 快速开始:三条路径
+
+按你手头的资源三选一。**路径 A 零门槛**,路径 B 只需一把 key,路径 C 是完整生产形态。
+
+### 路径 A —— 零 key 试跑(30 秒,验证记忆闭环)
+
+不需要密钥 / GPU / docker。一条命令看"存入→检索→复述"链路打通:
+
+```bash
+make install      # uv sync(Python 3.12)
+make demo         # echo LLM + 哈希嵌入 + 内存向量库,零外部依赖
+```
+
+会存入"我的猫叫 Benjamin",再问"我的猫叫什么",打印检索命中。
+⚠️ demo 档用 `echo` 回显 + 哈希嵌入,**只验证装配链路,不代表真实检索/对话质量**。
+
+### 路径 B —— 5 分钟 API 模式(加一把 key,不碰 GPU/docker)
+
+用任一 OpenAI 兼容云端点做 L0,免本地推理。复制下面内容为 `.env`(密钥只进 `.env`,
+已 gitignore,绝不入库):
+
+```bash
+# .env —— 以 DeepSeek 为例,换成你自己的兼容端点/key/模型即可
+MEMORY_AGENT_LLM__MODE=api
+MEMORY_AGENT_LLM__CHAT__BASE_URL=https://api.deepseek.com
+MEMORY_AGENT_LLM__CHAT__API_KEY=sk-你的key
+MEMORY_AGENT_LLM__CHAT__MODEL=deepseek-chat
+
+# 向量库:进程内本地文件,免 Qdrant/docker
+MEMORY_AGENT_VECTORDB__MODE=local
+
+# 嵌入二选一:
+#   ① 真实语义检索(推荐):Jina 云 API,另需一把 Jina key
+MEMORY_AGENT_EMBEDDER__BACKEND=jina_api
+MEMORY_AGENT_EMBEDDER__JINA_API_KEY=jina_你的key
+#   ② 先不接嵌入 key:退化的哈希嵌入(词面重叠可检索,无语义)——把上面两行换成:
+# MEMORY_AGENT_EMBEDDER__BACKEND=fake
+```
+
+```bash
+make install
+make run-api      # L3 :8002;/healthz 逐层报告依赖状态
+# 另开一个终端:
+curl -s localhost:8002/chat -H 'content-type: application/json' \
+  -d '{"message":"记住我最喜欢的颜色是蓝色"}'
+curl -s localhost:8002/chat -H 'content-type: application/json' \
+  -d '{"message":"我最喜欢什么颜色?"}'
+```
+
+无 key 的层会 **fail-fast 并指明层号**(如 `[L0/...]`),不会静默降级。
+
+### 路径 C —— 完整目标机器(GPU + 本地模型)
 
 ```bash
 # 0. 硬件定档(停点:档位须人类确认后写入)

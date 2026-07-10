@@ -46,7 +46,17 @@ dev = [
     "asgi-lifespan>=2.1.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "ruff>=0.6",
 ]
+
+[tool.ruff]
+# 只扫本项目三包 + 脚本;上游 bundle(omnigent/)不纳入
+extend-exclude = [".venv", "omnigent", ".upstream"]
+
+[tool.ruff.lint]
+# 抓真实问题(E4 import 约定 / E9 语法 / F pyflakes:未用导入、未定义名等);
+# 纯风格类(E7 如 l 变量名 / 分号)不纳入,避免为过 CI 而改动 core 既有代码。
+select = ["E4", "E9", "F"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

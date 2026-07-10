@@ -216,12 +216,53 @@ class OpenAICompatAdapter:
             await client.aclose()
 
 
+class EchoLLM:
+    """离线 demo 档(M20 A1):不做真实推理,仅回显"检索到的记忆 + 用户问题"。
+
+    用途:零 key / 零 GPU / 零 docker 验证"存入→检索→注入 prompt→复述"这条
+    记忆闭环链路是否打通。**不代表模型智力**;检索质量受 fake 哈希嵌入限制而退化。
+    与真实 LLMClient 同协议(async chat),可被 MemoryAgent 直接使用。
+    """
+
+    async def chat(self, messages: list[Message], **kw: Any) -> str:
+        system = next((m for m in messages if m.role == "system"), None)
+        user = next((m for m in messages if m.role == "user"), None)
+        mem = ""
+        if system is not None:
+            text = system.content if isinstance(system.content, str) else str(system.content)
+            if "## 相关记忆" in text:
+                mem = text.split("## 相关记忆", 1)[1].strip()
+        return (
+            "【echo demo 模式 · 非真实推理】\n"
+            f"你问:{_plain_text(user.content) if user else ''}\n"
+            f"我检索到的相关记忆:\n{mem or '(无相关记忆)'}"
+        )
+
+    async def health(self) -> bool:
+        return True
+
+
+def _plain_text(content: Any) -> str:
+    """从 Message.content(str 或 OpenAI 多模态 parts 列表)取纯文本。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "") for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return str(content)
+
+
 def build_llm_client(config, role: str = "chat", ledger=None):
     """按 config 装配 LLM 客户端(adapter 层工厂,core/services 只调用不选型)。
 
     mode=local → VLLMOpenAIAdapter(PHASE 1 路径,一键切回)
     mode=api   → OpenAICompatAdapter(chat / memory 双角色可分开配置)
+    mode=echo  → EchoLLM(M20 A1 离线 demo 档,零 key 验证记忆闭环)
     """
+    if config.llm.mode == "echo":
+        return EchoLLM()
     if config.llm.mode == "api":
         role_cfg = config.llm.memory if role == "memory" else config.llm.chat
         # memory 角色未配置时回落到 chat 角色(允许同一端点)

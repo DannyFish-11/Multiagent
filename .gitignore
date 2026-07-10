@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 data/
+logs/
 omni_memory_data/
 *.egg-info/
 dist/

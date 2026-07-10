@@ -1,9 +1,21 @@
 # memory-agent 任务入口(BUILD_SPEC §1)
-.PHONY: install up up-gpu down run-embed run-api run-mcp test \
+.PHONY: install up up-gpu down run-embed run-api run-mcp test lint demo \
         verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 verify fixtures
 
 install:
 	uv sync --group dev
+
+# M20 A1:无 key demo(echo LLM + fake 嵌入 + 内存向量库),零密钥/GPU/docker
+demo:
+	MEMORY_AGENT_LLM__MODE=echo \
+	MEMORY_AGENT_EMBEDDER__BACKEND=fake \
+	MEMORY_AGENT_VECTORDB__MODE=memory \
+	MEMORY_AGENT_MEMORY__EXTRACTION=verbatim \
+	uv run python scripts/demo.py
+
+# M20 A3:静态检查(与 test 一并进 CI)
+lint:
+	uv run ruff check core adapters services scripts
 
 up:
 	docker compose up -d qdrant

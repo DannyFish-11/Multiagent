@@ -46,7 +46,9 @@ class LLMRoleSettings(LLMEndpoint):
 class LLMSettings(BaseModel):
     # mode=local:走 vLLM 本地路径(PHASE 1,保留一键切回)
     # mode=api  :走外部 OpenAI 兼容 API(PHASE2.5 M-A,chat/memory 双角色)
-    mode: Literal["local", "api"] = "local"
+    # mode=echo :离线 demo 档(M20 A1),零 key 回显"检索到的记忆+问题",
+    #            仅验证记忆存取闭环,不产生真实推理(配 embedder=fake + vectordb=memory)
+    mode: Literal["local", "api", "echo"] = "local"
     base_url: str = "http://localhost:8000/v1"
     model: str = "gemma-4"
     model_by_tier: dict[str, str] = Field(default_factory=dict)

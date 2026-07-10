@@ -1,0 +1,37 @@
+name: CI
+
+# M20 A3:PR/推送时在干净环境跑离线套件 + lint + demo 冒烟,自动出绿灯。
+# 全离线、零真实花费:不需要任何密钥、GPU、docker(可观测性栈默认关,不参与 CI)。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv + Python 3.12
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install (dev group)
+        run: make install
+
+      - name: Lint (ruff)
+        run: make lint
+
+      - name: Tests (offline suite)
+        run: make test
+
+      - name: Demo smoke (no key / no GPU / no docker)
+        run: make demo

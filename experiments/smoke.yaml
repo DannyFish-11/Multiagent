@@ -1,0 +1,14 @@
+experiment_id: smoke_3x50
+random_seed: 42
+model_tier: cheap
+population:
+  - {agent_id: inst-1, policy: grader}
+  - {agent_id: inst-2, policy: vote}
+  - {agent_id: inst-3, policy: manual}
+task_source:
+  type: synthetic
+  path: ./experiments/synthetic_smoke.jsonl
+stop:
+  max_tasks: 50
+  budget_usd: 2.0
+metrics: [success_rate, cost_usd, latency_ms]

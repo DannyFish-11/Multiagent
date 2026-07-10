@@ -221,6 +221,31 @@ class PaymentsSettings(BaseModel):
     ledger_path: str = "./data/payments_ledger.json"
 
 
+class LoopSettings(BaseModel):
+    """M14.1 循环硬上限:全局默认 + 按点覆盖(触顶记 loop_capped 事件,非静默停)。"""
+
+    default_max_iterations: int = 8
+    per_point: dict[str, int] = Field(default_factory=dict)  # {"vote_rounds": 3, "delegation_chain": 5, ...}
+
+    def limit(self, point: str) -> int:
+        return int(self.per_point.get(point, self.default_max_iterations))
+
+
+class VoteSettings(BaseModel):
+    """M15.1 VotePolicy:准入投票裁决规则。"""
+
+    rule: Literal["simple_majority", "supermajority", "weighted"] = "simple_majority"
+    supermajority_ratio: float = 0.66
+    max_rounds: int = 3          # 受 loops 约束
+
+
+class ExperimentSettings(BaseModel):
+    """M14.2 实验运行器默认值。"""
+
+    dir: str = "./experiments"
+    snapshot_dir: str = "./experiments/snapshots"
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_AGENT_",
@@ -245,6 +270,9 @@ class AppConfig(BaseSettings):
     web: WebSettings = Field(default_factory=WebSettings)
     gmail_poll: GmailPollSettings = Field(default_factory=GmailPollSettings)
     payments: PaymentsSettings = Field(default_factory=PaymentsSettings)
+    loops: LoopSettings = Field(default_factory=LoopSettings)
+    vote: VoteSettings = Field(default_factory=VoteSettings)
+    experiment: ExperimentSettings = Field(default_factory=ExperimentSettings)
 
     @classmethod
     def settings_customise_sources(

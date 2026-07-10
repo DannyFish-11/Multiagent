@@ -61,13 +61,21 @@ class CostLedger:
     # ---- 记账 / 闸门 ----
 
     def record(self, endpoint: str, model: str,
-               prompt_tokens: int, completion_tokens: int = 0) -> float:
-        """记录一次调用,返回本次费用(美元)。并发安全。"""
+               prompt_tokens: int, completion_tokens: int = 0,
+               *, experiment_id: str = "", task_id: str = "",
+               agent_id: str = "", purpose: str = "") -> float:
+        """记录一次调用,返回本次费用(美元)。并发安全。
+
+        M14.1 维度标签 {experiment_id, task_id, agent_id, purpose}:既有日预算
+        逻辑不变,另按 experiment_id 独立累计(experiment_usd)。"""
         with self._lock:
-            return self._record_locked(endpoint, model, prompt_tokens, completion_tokens)
+            return self._record_locked(endpoint, model, prompt_tokens, completion_tokens,
+                                       experiment_id, task_id, agent_id, purpose)
 
     def _record_locked(self, endpoint: str, model: str,
-                       prompt_tokens: int, completion_tokens: int = 0) -> float:
+                       prompt_tokens: int, completion_tokens: int = 0,
+                       experiment_id: str = "", task_id: str = "",
+                       agent_id: str = "", purpose: str = "") -> float:
         self._rollover()
         price = self._prices.get(model)
         cost = 0.0
@@ -82,8 +90,27 @@ class CostLedger:
         entry["completion_tokens"] += completion_tokens
         entry["usd"] = round(entry["usd"] + cost, 8)
         self._state["total_usd"] = round(self._state["total_usd"] + cost, 8)
+        # 维度累计(实验记账)
+        if experiment_id:
+            exp = self._state.setdefault("experiments", {}).setdefault(
+                experiment_id, {"usd": 0.0, "by_agent": {}, "by_purpose": {}})
+            exp["usd"] = round(exp["usd"] + cost, 8)
+            if agent_id:
+                exp["by_agent"][agent_id] = round(exp["by_agent"].get(agent_id, 0.0) + cost, 8)
+            if purpose:
+                exp["by_purpose"][purpose] = round(exp["by_purpose"].get(purpose, 0.0) + cost, 8)
         self._save()
         return cost
+
+    def experiment_usd(self, experiment_id: str) -> float:
+        with self._lock:
+            self._rollover()
+            return float(self._state.get("experiments", {}).get(experiment_id, {}).get("usd", 0.0))
+
+    def experiment_snapshot(self, experiment_id: str) -> dict:
+        with self._lock:
+            return json.loads(json.dumps(
+                self._state.get("experiments", {}).get(experiment_id, {})))
 
     def today_usd(self) -> float:
         self._rollover()

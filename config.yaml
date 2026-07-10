@@ -77,6 +77,21 @@ services:
   api_host: 0.0.0.0
   api_port: 8002
 
+# ---------------- PHASE 4 ----------------
+
+loops:  # M14.1 循环硬上限(触顶记 loop_capped,非静默停)
+  default_max_iterations: 8
+  per_point: {}          # 如 {vote_rounds: 3, delegation_chain: 5}
+
+vote:   # M15.1 VotePolicy 裁决规则
+  rule: simple_majority  # simple_majority | supermajority | weighted
+  supermajority_ratio: 0.66
+  max_rounds: 3
+
+experiment:  # M14.2 实验运行器
+  dir: ./experiments
+  snapshot_dir: ./experiments/snapshots
+
 # ---------------- PHASE 3 ----------------
 
 concurrency:  # M9.1

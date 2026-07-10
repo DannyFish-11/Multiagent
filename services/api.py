@@ -74,6 +74,13 @@ def create_app(
         # M8 埋点
         app.state.retrieval_logger = RetrievalLogger(cfg.metabolism.events_path)
         app.state.agent.set_retrieval_logger(app.state.retrieval_logger)
+        # M9 审批中枢(无 Omnigent 形态的危险动作守门人)
+        from core.approval import ApprovalQueue, Notifier
+        from core.audit import AuditLog
+
+        app.state.audit = AuditLog(cfg.approval.audit_path)
+        app.state.approvals = ApprovalQueue(
+            cfg.approval, app.state.audit, Notifier(cfg.approval))
         logger.info("L3 api ready: memory.backend=%s agent_id=%s",
                     cfg.memory.backend, app.state.identity.agent_id)
         yield
@@ -158,6 +165,29 @@ def create_app(
         ok = app.state.retrieval_logger.set_feedback(
             req.event_id, req.feedback, req.adopted_memory_ids)
         return {"recorded": ok}
+
+    # ---- PHASE 3 审批中枢(M9.2) ----
+
+    @app.get("/approvals")
+    async def list_approvals():
+        """列出待批准动作队列。"""
+        return {"pending": app.state.approvals.list_pending()}
+
+    @app.post("/approvals/{approval_id}/approve")
+    async def approve(approval_id: str):
+        ok = await app.state.approvals.resolve(approval_id, approved=True)
+        return JSONResponse(status_code=200 if ok else 404, content={"resolved": ok})
+
+    @app.post("/approvals/{approval_id}/reject")
+    async def reject(approval_id: str):
+        ok = await app.state.approvals.resolve(approval_id, approved=False)
+        return JSONResponse(status_code=200 if ok else 404, content={"resolved": ok})
+
+    @app.get("/audit")
+    async def audit_tail(limit: int = 50):
+        """审计日志尾部(运维/验收用)。"""
+        entries = app.state.audit.read_all()
+        return {"entries": entries[-limit:], "total": len(entries)}
 
     return app
 

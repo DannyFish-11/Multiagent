@@ -151,6 +151,76 @@ class MetabolismSettings(BaseModel):
     report_dir: str = "./reports"
 
 
+# ---------------- PHASE 3 ----------------
+
+class ConcurrencySettings(BaseModel):
+    """M9.1 并发限额:会话数与 LLM 并发信号量(防 API 限流雪崩)。"""
+
+    max_concurrent_sessions: int = 32
+    max_concurrent_llm_calls: int = 8
+
+
+class PolicyRule(BaseModel):
+    """M9.2 声明式分级规则:动作类型 × 参数条件 → auto|confirm|deny。
+
+    action 支持 fnmatch 通配(如 gmail_send*);when 为参数谓词,支持算子后缀:
+    field / field__gte / field__lte / field__in / field__not_in / field__regex。
+    规则自上而下首条命中生效。
+    """
+
+    action: str
+    when: dict = Field(default_factory=dict)
+    level: Literal["auto", "confirm", "deny"]
+    reason: str = ""
+
+
+class ApprovalSettings(BaseModel):
+    """M9.2 审批中枢。"""
+
+    timeout_s: float = 300.0            # confirm 超时未批 → 取消
+    audit_path: str = "./logs/audit.jsonl"
+    notify: Literal["none", "webhook", "email"] = "none"
+    webhook_url: str = ""
+    default_level: Literal["auto", "confirm", "deny"] = "confirm"  # 无规则命中时保守 confirm
+    policies: list[PolicyRule] = Field(default_factory=list)
+
+
+class WebSettings(BaseModel):
+    """M10 上网:搜索 API(供应商由人类选定,停点要 key)+ 抓取 + 域名黑白名单。"""
+
+    search_provider: Literal["tavily", "serper", "none"] = "none"
+    search_api_key: str = ""
+    search_base_url: str = ""           # 留空用 provider 默认
+    fetch_timeout_s: float = 30.0
+    fetch_max_bytes: int = 2_000_000
+    domain_blacklist: list[str] = Field(default_factory=list)
+    domain_whitelist: list[str] = Field(default_factory=list)  # 非空则白名单模式
+
+
+class GmailPollSettings(BaseModel):
+    """M11 收件驱动(默认关):按标签轮询,阅读→按需入记忆→仅草拟回复。"""
+
+    enabled: bool = False
+    interval_s: float = 30.0
+    label: str = "agent-inbox"
+
+
+class PaymentsSettings(BaseModel):
+    """M12 支付解锁 + 硬性笼子(缺一不得上线;enabled=false 时维持附录 A 拒付)。"""
+
+    enabled: bool = False
+    provider: Literal["virtual_card", "x402", "none"] = "none"
+    provider_base_url: str = ""
+    provider_api_key: str = ""
+    per_tx_usd: float = 10.0            # 单笔上限
+    daily_usd: float = 20.0             # 日累计上限
+    monthly_usd: float = 100.0          # 月累计上限
+    confirm_threshold_usd: float = 1.0  # 达阈值必须 confirm;低于则 auto+事后通知
+    whitelist_enabled: bool = False
+    payee_whitelist: list[str] = Field(default_factory=list)
+    ledger_path: str = "./data/payments_ledger.json"
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_AGENT_",
@@ -170,6 +240,11 @@ class AppConfig(BaseSettings):
     a2a: A2ASettings = Field(default_factory=A2ASettings)
     gmail: GmailSettings = Field(default_factory=GmailSettings)
     metabolism: MetabolismSettings = Field(default_factory=MetabolismSettings)
+    concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
+    approval: ApprovalSettings = Field(default_factory=ApprovalSettings)
+    web: WebSettings = Field(default_factory=WebSettings)
+    gmail_poll: GmailPollSettings = Field(default_factory=GmailPollSettings)
+    payments: PaymentsSettings = Field(default_factory=PaymentsSettings)
 
     @classmethod
     def settings_customise_sources(

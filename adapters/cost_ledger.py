@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ class CostLedger:
         self._budget = daily_budget_usd
         self._path = Path(path)
         self._state: dict[str, Any] = {"date": _today(), "entries": {}, "total_usd": 0.0}
+        self._lock = threading.Lock()  # M9.1 并发安全(跨线程/事件循环 record)
         self._load()
 
     # ---- 持久化 ----
@@ -60,7 +62,12 @@ class CostLedger:
 
     def record(self, endpoint: str, model: str,
                prompt_tokens: int, completion_tokens: int = 0) -> float:
-        """记录一次调用,返回本次费用(美元)。"""
+        """记录一次调用,返回本次费用(美元)。并发安全。"""
+        with self._lock:
+            return self._record_locked(endpoint, model, prompt_tokens, completion_tokens)
+
+    def _record_locked(self, endpoint: str, model: str,
+                       prompt_tokens: int, completion_tokens: int = 0) -> float:
         self._rollover()
         price = self._prices.get(model)
         cost = 0.0
@@ -83,13 +90,16 @@ class CostLedger:
         return float(self._state["total_usd"])
 
     def check_budget(self) -> None:
-        """超出日预算时抛错(在发起新请求之前调用)。"""
-        self._rollover()
-        if self._budget is not None and self._state["total_usd"] >= self._budget:
+        """超出日预算时抛错(在发起新请求之前调用)。并发安全。"""
+        with self._lock:
+            self._rollover()
+            over = self._budget is not None and self._state["total_usd"] >= self._budget
+            total, date = self._state["total_usd"], self._state["date"]
+        if over:
             raise LayerError(
                 "L0", "cost-ledger",
-                f"已超出日预算:当日用量 ${self._state['total_usd']:.4f} >= "
-                f"budget.daily_usd ${self._budget:.4f}(日期 {self._state['date']});"
+                f"已超出日预算:当日用量 ${total:.4f} >= "
+                f"budget.daily_usd ${self._budget:.4f}(日期 {date});"
                 "新请求被拒绝,提高预算或次日重试",
             )
 

@@ -77,6 +77,58 @@ services:
   api_host: 0.0.0.0
   api_port: 8002
 
+# ---------------- PHASE 3 ----------------
+
+concurrency:  # M9.1
+  max_concurrent_sessions: 32
+  max_concurrent_llm_calls: 8    # 信号量,防 API 限流雪崩
+
+approval:  # M9.2 审批中枢(无 Omnigent 形态的危险动作守门人)
+  timeout_s: 300
+  audit_path: ./logs/audit.jsonl
+  notify: none                   # none | webhook | email
+  webhook_url: ""
+  default_level: confirm         # 无规则命中时保守 confirm
+  # 声明式分级:action(fnmatch) × when(参数谓词)→ auto|confirm|deny,首条命中生效
+  policies:
+    - {action: "web_search",  when: {}, level: auto}
+    - {action: "web_fetch",   when: {}, level: auto}
+    - {action: "web_submit",  when: {}, level: confirm, reason: "表单提交需确认"}
+    - {action: "web_download",when: {}, level: confirm, reason: "下载执行件需确认"}
+    - {action: "gmail_read",  when: {}, level: auto}
+    - {action: "gmail_search",when: {}, level: auto}
+    - {action: "gmail_draft", when: {}, level: auto}
+    - {action: "gmail_send",  when: {}, level: confirm, reason: "发信需确认"}
+    - {action: "gmail_delete",when: {}, level: confirm, reason: "删信需确认"}
+    - {action: "gmail_archive",when: {}, level: confirm}
+    - {action: "payment", when: {amount_usd__gte: 1.0}, level: confirm, reason: "≥$1 需确认"}
+    - {action: "payment", when: {}, level: auto}
+
+web:  # M10 上网(供应商与 key 由人类指定 → .env)
+  search_provider: none          # tavily | serper | none
+  search_api_key: ""
+  fetch_timeout_s: 30
+  fetch_max_bytes: 2000000
+  domain_blacklist: []
+  domain_whitelist: []           # 非空则白名单模式
+
+gmail_poll:  # M11 收件驱动(默认关)
+  enabled: false
+  interval_s: 30
+  label: agent-inbox
+
+payments:  # M12 支付笼子(enabled=false 时维持附录 A 默认拒付)
+  enabled: false
+  provider: none                 # virtual_card | x402 | none
+  provider_base_url: ""
+  per_tx_usd: 10.0
+  daily_usd: 20.0
+  monthly_usd: 100.0
+  confirm_threshold_usd: 1.0
+  whitelist_enabled: false
+  payee_whitelist: []
+  ledger_path: ./data/payments_ledger.json
+
 agent:
   top_k: 5
   system_prompt: |

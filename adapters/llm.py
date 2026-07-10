@@ -240,3 +240,23 @@ def build_ledger(config):
 
     return CostLedger(config.budget.prices, config.budget.daily_usd,
                       config.budget.ledger_path)
+
+
+class ConcurrencyLimitedLLM:
+    """LLMClient 装饰器(M9.1):信号量限制并发 LLM 调用,防 API 限流雪崩。
+
+    包裹任意 LLMClient;不改被包裹者签名(adapter 红线:core 只见 LLMClient 协议)。
+    """
+
+    def __init__(self, inner, max_concurrent: int) -> None:
+        import asyncio as _asyncio
+
+        self._inner = inner
+        self._sem = _asyncio.Semaphore(max(1, max_concurrent))
+
+    async def chat(self, messages, **kw):
+        async with self._sem:
+            return await self._inner.chat(messages, **kw)
+
+    def __getattr__(self, name):  # 透传 health / aclose / model / last_meta 等
+        return getattr(self._inner, name)

@@ -27,8 +27,12 @@ def get_ledger(config: AppConfig):
 
 
 def build_llm(config: AppConfig, role: str = "chat") -> LLMClient:
-    """选型逻辑在 adapters.llm.build_llm_client(mode=local|api,双角色)。"""
-    return build_llm_client(config, role=role, ledger=get_ledger(config))
+    """选型逻辑在 adapters.llm.build_llm_client(mode=local|api,双角色);
+    外层套并发信号量(M9.1 防 API 限流雪崩)。"""
+    from adapters.llm import ConcurrencyLimitedLLM
+
+    inner = build_llm_client(config, role=role, ledger=get_ledger(config))
+    return ConcurrencyLimitedLLM(inner, config.concurrency.max_concurrent_llm_calls)
 
 
 def build_memory_store(config: AppConfig, embedder: Embedder | None = None,

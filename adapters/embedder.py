@@ -29,6 +29,15 @@ class Embedder(Protocol):
     def dim(self) -> int: ...
 
 
+class UnsupportedModality(LayerError):
+    """API 后端不支持的模态:显式拒绝而非静默降级(PHASE2.5 M-B)。"""
+
+    def __init__(self, modality: str, backend: str) -> None:
+        super().__init__("L1", backend,
+                         f"该后端暂不支持 {modality} 模态;能力差异见 README(不做静默降级)")
+        self.modality = modality
+
+
 def truncate_and_normalize(vec: list[float], target_dim: int | None) -> list[float]:
     """Matryoshka 截断到 target_dim 后 L2 归一化;target_dim 为 None 时仅归一化。"""
     if target_dim is not None:
@@ -201,7 +210,8 @@ class JinaAPIAdapter:
 
     API_URL = "https://api.jina.ai/v1/embeddings"
 
-    def __init__(self, settings: EmbedderSettings) -> None:
+    def __init__(self, settings: EmbedderSettings, ledger=None,
+                 transport: httpx.AsyncBaseTransport | None = None) -> None:
         if not settings.jina_api_key:
             raise LayerError(
                 "L1", "jina-api",
@@ -209,53 +219,83 @@ class JinaAPIAdapter:
             )
         self._settings = settings
         self._dim = settings.effective_dim
+        self._ledger = ledger  # 用量并入 CostLedger(M-A/M-B 共用)
         self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {settings.jina_api_key}"}, timeout=60.0
+            headers={"Authorization": f"Bearer {settings.jina_api_key}"},
+            timeout=60.0, transport=transport,
         )
 
     @property
     def dim(self) -> int:
         return self._dim
 
+    def _to_api_input(self, item: MultimodalInput) -> dict:
+        if item.type == "text":
+            return {"text": item.content}
+        if item.type == "image":
+            return {"image": item.content}
+        # audio/video:API 版能力以 Jina 文档为准;不支持时显式拒绝,不静默降级
+        if not self._settings.api_supports_audio:
+            raise UnsupportedModality(item.type, "jina-api")
+        return {"audio": item.content}
+
+    async def _post_with_retry(self, payload: dict) -> dict:
+        import asyncio as _asyncio
+
+        last_exc: Exception | None = None
+        for attempt in range(self._settings.api_max_retries + 1):
+            try:
+                resp = await self._client.post(self.API_URL, json=payload)
+                if resp.status_code != 200:
+                    raise LayerError("L1", "jina-api",
+                                     f"HTTP {resp.status_code}: {resp.text[:500]}")
+                return resp.json()
+            except (httpx.HTTPError, LayerError) as exc:
+                if isinstance(exc, UnsupportedModality):
+                    raise
+                last_exc = exc
+                if attempt < self._settings.api_max_retries and self._settings.api_retry_backoff_s > 0:
+                    await _asyncio.sleep(self._settings.api_retry_backoff_s * (2 ** attempt))
+        raise last_exc  # type: ignore[misc]
+
     async def embed(self, inputs: list[MultimodalInput]) -> list[list[float]]:
-        api_inputs = []
-        for i in inputs:
-            if i.type == "text":
-                api_inputs.append({"text": i.content})
-            elif i.type == "image":
-                api_inputs.append({"image": i.content})
-            else:
-                api_inputs.append({"audio": i.content})
-        payload = {
-            "model": self._settings.model_name.split("/")[-1],
-            "task": "retrieval.query",
-            "input": api_inputs,
-        }
-        if self._settings.matryoshka_dim:
-            payload["dimensions"] = self._settings.matryoshka_dim
-        resp = await self._client.post(self.API_URL, json=payload)
-        if resp.status_code != 200:
-            raise LayerError("L1", "jina-api", f"HTTP {resp.status_code}: {resp.text[:500]}")
-        data = resp.json()
-        vectors = [truncate_and_normalize(d["embedding"], None) for d in data["data"]]
+        if self._ledger is not None:
+            self._ledger.check_budget()
+        api_inputs = [self._to_api_input(i) for i in inputs]
+        model = self._settings.model_name.split("/")[-1]
+        vectors: list[list[float]] = []
+        batch_size = max(1, self._settings.api_batch_size)
+        for start in range(0, len(api_inputs), batch_size):  # 批量请求合并 + 上限拆分
+            batch = api_inputs[start:start + batch_size]
+            payload = {"model": model, "task": "retrieval.query", "input": batch}
+            if self._settings.matryoshka_dim:
+                payload["dimensions"] = self._settings.matryoshka_dim
+            data = await self._post_with_retry(payload)
+            usage = data.get("usage") or {}
+            if self._ledger is not None and usage:
+                self._ledger.record(self.API_URL, model,
+                                    int(usage.get("total_tokens",
+                                                  usage.get("prompt_tokens", 0))))
+            vectors.extend(truncate_and_normalize(d["embedding"], None) for d in data["data"])
         for v in vectors:
             if len(v) != self._dim:
                 raise LayerError(
                     "L1", "jina-api",
                     f"API 返回维度 {len(v)} != config 期望 {self._dim}"
-                    "(dimensions 参数可能未生效,检查模型名与 matryoshka_dim)",
+                    "(dimensions 参数可能未生效,检查模型名与 matryoshka_dim;"
+                    "若确认换模型,走 M7 export→import 重算流程)",
                 )
         return vectors
 
 
-def build_embedder(settings: EmbedderSettings) -> Embedder:
+def build_embedder(settings: EmbedderSettings, ledger=None) -> Embedder:
     """按 config 显式选择后端;不存在任何自动回退路径。"""
     if settings.backend == "local":
         return JinaV5OmniAdapter(settings)
     if settings.backend == "remote":
         return RemoteEmbedderAdapter(settings.base_url, settings.effective_dim)
     if settings.backend == "jina_api":
-        return JinaAPIAdapter(settings)
+        return JinaAPIAdapter(settings, ledger=ledger)
     if settings.backend == "fake":
         return FakeDeterministicEmbedder(settings.effective_dim)
     raise LayerError("L1", "embedder", f"未知 backend: {settings.backend}")

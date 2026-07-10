@@ -1,0 +1,13 @@
+.git
+.venv
+data/
+logs/
+reports/
+exports/
+tests/
+.upstream/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+omni_memory_data/

@@ -7,7 +7,24 @@ hardware:
   # 本容器检测结果:无 GPU / 15GB RAM → 低于任何档位,模型服务须在目标机器上运行。
   tier: unset
 
-llm:  # L0 — vLLM OpenAI 兼容端点
+llm:  # L0
+  # mode=local:vLLM 本地路径(PHASE 1);mode=api:外部 OpenAI 兼容 API(PHASE2.5)
+  # 一键切回本地:MEMORY_AGENT_LLM__MODE=local
+  mode: local
+  # ---- API 模式(PHASE2.5 M-A):chat / memory 双角色,可同端点也可分开 ----
+  chat:
+    base_url: ""          # 停点:供应商/模型/key 由人类指定(.env 注入)
+    api_key: ""
+    model: ""
+    fallbacks: []         # [{base_url, api_key, model}] 主端点连续失败后切换
+    failover_threshold: 3
+    max_retries: 3
+    timeout_s: 120
+  memory:                 # 记忆抽取/整合专用;留空回落 chat
+    base_url: ""
+    api_key: ""
+    model: ""
+  # ---- 本地模式(PHASE 1 保留) ----
   base_url: http://localhost:8000/v1
   model: gemma-4
   # 各档位实际拉起的 HF 模型名(download_models.py / docker-compose 使用):
@@ -65,6 +82,11 @@ agent:
   system_prompt: |
     你是一个拥有长期记忆的助手。下面的「相关记忆」是你从过往交互中检索到的内容,
     回答时优先利用这些记忆;若记忆与问题无关则忽略。
+
+budget:  # PHASE2.5 M-A 成本护栏(adapter 层,不依赖 Omnigent 在场)
+  daily_usd: 5.0
+  ledger_path: ./data/cost_ledger.json
+  prices: {}   # 每百万 token 美元:{model: {input: x, output: y}};未配价按 0 记并标注 unpriced
 
 # ---------------- PHASE 2 ----------------
 

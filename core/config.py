@@ -25,12 +25,44 @@ class HardwareSettings(BaseModel):
     tier: Literal["A", "B", "C", "unset"] = "unset"
 
 
+class LLMEndpoint(BaseModel):
+    """一个 OpenAI 兼容端点三元组(PHASE2.5 M-A)。"""
+
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+class LLMRoleSettings(LLMEndpoint):
+    """一个 LLM 角色(chat / memory):主端点 + 备用端点 + 重试/切换参数。"""
+
+    fallbacks: list[LLMEndpoint] = Field(default_factory=list)
+    failover_threshold: int = 3   # 主端点连续失败 N 次后切换
+    max_retries: int = 3          # 单端点指数退避重试上限
+    retry_backoff_s: float = 0.5  # 退避基数(测试可置 0)
+    timeout_s: float = 120.0
+
+
 class LLMSettings(BaseModel):
+    # mode=local:走 vLLM 本地路径(PHASE 1,保留一键切回)
+    # mode=api  :走外部 OpenAI 兼容 API(PHASE2.5 M-A,chat/memory 双角色)
+    mode: Literal["local", "api"] = "local"
     base_url: str = "http://localhost:8000/v1"
     model: str = "gemma-4"
     model_by_tier: dict[str, str] = Field(default_factory=dict)
     api_key: str = "EMPTY"
     timeout_s: float = 120.0
+    chat: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
+    memory: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
+
+
+class BudgetSettings(BaseModel):
+    """成本护栏(M-A CostLedger):单价表 + 日预算 + 账本路径。"""
+
+    daily_usd: float = 5.0
+    # 每百万 token 美元:{model: {input: x, output: y}}
+    prices: dict[str, dict[str, float]] = Field(default_factory=dict)
+    ledger_path: str = "./data/cost_ledger.json"
 
 
 class EmbedderSettings(BaseModel):
@@ -42,6 +74,11 @@ class EmbedderSettings(BaseModel):
     base_url: str = "http://localhost:8001"
     device: str = "auto"
     jina_api_key: str | None = None
+    # PHASE2.5 M-B:API 化参数(批量上限/重试/模态能力以 Jina 文档为准,经 config 可调)
+    api_batch_size: int = 64
+    api_max_retries: int = 3
+    api_retry_backoff_s: float = 0.5
+    api_supports_audio: bool = False  # API 版暂不支持的模态显式拒绝,不静默降级
 
     @property
     def effective_dim(self) -> int:
@@ -128,6 +165,7 @@ class AppConfig(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     services: ServiceSettings = Field(default_factory=ServiceSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    budget: BudgetSettings = Field(default_factory=BudgetSettings)
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     a2a: A2ASettings = Field(default_factory=A2ASettings)
     gmail: GmailSettings = Field(default_factory=GmailSettings)

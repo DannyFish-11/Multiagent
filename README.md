@@ -131,6 +131,45 @@ simplemem 后端、是否向上游提修复 PR,由人类决策。
 
 PHASE 2 测试:51 通过 / 9 跳过(跳过者为需真实 GPU 服务的 PHASE 1 规格验收)。
 
+### PHASE 2.5(API 化 + Docker 化,PHASE2.5_SPEC)
+
+- **M-A LLM API 化**:`adapters/llm.py::OpenAICompatAdapter` —— 任意 OpenAI 兼容
+  端点(三元组全走 config/.env),多模态 parts 直通;指数退避重试(默认 3 次);
+  `llm.chat` / `llm.memory` 双角色可分开配置;主端点连续失败 N 次自动切
+  fallbacks(切换写日志 + `adapter.last_meta` 标注);`adapters/cost_ledger.py`
+  按日记账,超 `budget.daily_usd` 拒绝新请求(不依赖 Omnigent 在场)。
+  本地 vLLM 路径保留:`MEMORY_AGENT_LLM__MODE=local` 一键切回。
+- **M-B 嵌入 API 化**:`JinaAPIAdapter` 升级 —— 批量合并/按上限拆分
+  (`embedder.api_batch_size`)、退避重试、用量并入 CostLedger;audio 在 API 版
+  暂不支持时显式抛 `UnsupportedModality`(能力差异:本地 v5-omni 支持
+  text/image/audio,API 版本以 Jina 文档为准 —— 文档站在本构建环境被网络策略
+  拦截,实际模型名/批量上限/音频能力待有网机器核验,全部经 config 可调);
+  Qdrant 维度守卫:已有 collection 维度与新嵌入不一致时启动即拦,并指引
+  M7 export→import 重算流程,禁止静默建新库。
+- **M-C Docker 化**:`docker compose up -d` 三服务(qdrant / memory-api /
+  mcp-server)。镜像 python:3.12-slim 多阶段、无模型权重、无密钥(.env 注入,
+  模板 `.env.example`)、非 root 运行;数据/日志/导出全挂 volume。
+  **mcp-server 与 memory-api 同镜像不同入口**(而非合并进程):MCP 走 stdio
+  按需拉起(`docker compose --profile mcp run --rm mcp-server`),与 API 经同一
+  Qdrant collection 共享状态——合并进程会把 stdio 生命周期绑死在 HTTP 服务上,
+  分开入口更符合 MCP 的调用模型。Omnigent 不进容器:模式一(默认)纯 Docker,
+  由容器隔离 + CostLedger + 策略白名单承担基础治理;模式二在宿主机装 Omnigent,
+  harness 指向容器端点(沿用 M4 bundle,只改地址)。
+  一键脚本 `scripts/bootstrap.sh`;冒烟验收 `scripts/verify_25.sh`(七项)。
+- **M-D 验收**:adapter 单测 21 条全 mock 不花真钱(重试/切换/记账/预算拒绝/
+  批量拆分/模态拒绝/维度守卫/结构校验);verify_25.sh 七项须在有 docker daemon
+  与真实 API key 的机器上执行(本构建容器无 daemon,镜像体积 <500MB 目标待
+  目标机器 `docker build` 实测)。
+
+**红线执行记录(PHASE2.5)**:规格要求改动收敛在 adapters/config/compose/脚本/
+测试。实际有三处装配层例外,原因如下,逻辑零改动:
+1. `core/config.py` —— 新配置节(llm.mode/chat/memory、budget、embedder.api_*)
+   必须进 schema;
+2. `core/factory.py` —— LLM 选型下沉到 `adapters.llm.build_llm_client` 后,
+   工厂改为纯转发(否则 config 切换无法生效);
+3. `services/api.py` —— 规格 M-C 自身要求 /healthz 逐项报告三依赖,原实现
+   只报 L0/L2,不改此文件无法满足验收①。
+
 ## MCP server
 
 ```bash

@@ -49,8 +49,26 @@ class QdrantAdapter:
                         size=self._dim, distance=models.Distance.COSINE
                     ),
                 )
+                return
+        except LayerError:
+            raise
         except Exception as exc:
             raise LayerError("L2", "qdrant", f"建集合失败(检查 Qdrant 是否可达): {exc}") from exc
+        # 维度守卫(PHASE2.5 M-B):已有集合维度与当前嵌入维度不一致时禁止静默建新库
+        try:
+            info = await self._client.get_collection(self.collection)
+            existing = info.config.params.vectors.size  # 单一未命名向量
+        except Exception:
+            return  # 取不到维度信息时不阻塞(老版本 qdrant 兼容)
+        if existing != self._dim:
+            raise LayerError(
+                "L2", "qdrant",
+                f"维度不一致:collection '{self.collection}' 为 {existing} 维,"
+                f"当前嵌入模型输出 {self._dim} 维。禁止静默重建;请走 M7 迁移流程:"
+                "python -m core.memorypack export --out backup.tar.zst(用旧配置)→ "
+                "更换 collection 名或清空后 → python -m core.memorypack import "
+                "--pack backup.tar.zst(新嵌入模型重算全部向量)",
+            )
 
     async def upsert(self, vectors: list[list[float]], payloads: list[dict[str, Any]],
                      ids: list[str] | None = None) -> list[str]:

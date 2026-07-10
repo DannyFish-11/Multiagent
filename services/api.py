@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from adapters.a2a import build_signed_card
 from adapters.embedder import RemoteEmbedderAdapter, build_embedder
-from adapters.llm import VLLMOpenAIAdapter
+from adapters.llm import build_ledger, build_llm_client
 from core.agent import MemoryAgent
 from core.identity import AgentIdentity
 from core.metabolism import RetrievalLogger
@@ -48,14 +48,12 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        _llm = llm or VLLMOpenAIAdapter(
-            base_url=cfg.llm.base_url, model=cfg.llm.model,
-            api_key=cfg.llm.api_key, timeout_s=cfg.llm.timeout_s,
-        )
+        _ledger = build_ledger(cfg)
+        _llm = llm or build_llm_client(cfg, role="chat", ledger=_ledger)
         if cfg.embedder.backend == "remote":
             _embedder = RemoteEmbedderAdapter(cfg.embedder.base_url, cfg.embedder.effective_dim)
         else:
-            _embedder = build_embedder(cfg.embedder)
+            _embedder = build_embedder(cfg.embedder, ledger=_ledger)
 
         # fail-fast 依赖健康检查(BUILD_SPEC §0.2-5)
         if not skip_dependency_checks:
@@ -65,6 +63,8 @@ def create_app(
                 await _embedder.health()
 
         _memory = memory if memory is not None else build_memory_store(cfg, embedder=_embedder, llm=_llm)
+        app.state.embedder = _embedder
+        app.state.ledger = _ledger
         app.state.llm = _llm
         app.state.memory = _memory
         app.state.agent = MemoryAgent(_llm, _memory, cfg)
@@ -87,12 +87,28 @@ def create_app(
 
     @app.get("/healthz", response_model=HealthReport)
     async def healthz():
+        """逐项报告三依赖连通状态:LLM 端点(L0)/ 嵌入端点(L1)/ Qdrant(L2)。"""
         layers: dict[str, str] = {"L3": "ok"}
         status = "ok"
-        for name, obj in (("L0", app.state.llm), ("L2", app.state.memory)):
+
+        async def _probe_embedder() -> None:
+            if hasattr(app.state.embedder, "health"):
+                await app.state.embedder.health()
+            else:  # 本地/假后端:跑一次探针嵌入
+                await app.state.embedder.embed([MultimodalInput.text("healthz probe")])
+
+        async def _probe_qdrant() -> None:
+            mem = app.state.memory
+            db = getattr(mem, "_db", None)
+            if db is not None and hasattr(db, "health"):
+                await db.health()
+
+        checks = (("L0", getattr(app.state.llm, "health", None)),
+                  ("L1", _probe_embedder), ("L2", _probe_qdrant))
+        for name, probe in checks:
             try:
-                if hasattr(obj, "health"):
-                    await obj.health()
+                if probe is not None:
+                    await probe()
                 layers[name] = "ok"
             except LayerError as exc:
                 layers[name] = str(exc)

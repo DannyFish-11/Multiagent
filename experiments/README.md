@@ -12,7 +12,21 @@
 一键(目标机器,配好 key 后):
     python -m core.experiment_run experiments/smoke.yaml   # 见下方 TODO
 
-## M15 / M16(人类停点 —— 未开跑)
+## M13 群体资产库(已完成)
+
+`core/commons.py`:统一信封 CommonsEnvelope(签名+hash 校验)、三种货物
+(memory/skill tar+SKILL.md/mcp_entry)、三级准入(GraderAdmission/SandboxAdmission/
+HumanAdmission)、采用拉取制 + 举报降级 + revoke 传播、metrics 端点原语。
+三条硬负向测试全过(mcp 不可绕过人工、skill 未过沙箱不可采用、revoke 传播移除)。
+
+## M15 治理对照:管道已跑通(冒烟),满配待授权
+
+`core/m15_governance.py` 三臂(grader/vote/natural)共用测试条目流(良品+四类坏品带真值),
+指标:坏品拦截率(按四类)/良品误杀率/裁决延迟/成本。**冒烟已跑通并产出
+`reports/m15_governance.md`**(确定性替身打分,零花费,报告醒目标注"不构成结论")。
+→ 满配跑数(≥3 seeds × 3 臂、真实模型)需人类授权预算 + 模型档位 + key。
+
+## M16 分工涌现(人类停点 —— 未开跑)
 
 M15(治理对照:grader vs vote vs 自然筛选)与 M16(分工涌现)的**机制已就位**:
 - VotePolicy:`core/promotion.py::VotePolicy`(simple_majority/supermajority/weighted,全量审计)

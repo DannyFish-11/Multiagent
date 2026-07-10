@@ -12,13 +12,20 @@ from core.errors import LayerError
 class QdrantAdapter:
     """对 qdrant-client 的薄封装;支持 server / 本地文件 / 纯内存三种模式。"""
 
-    def __init__(self, settings: VectorDBSettings, dim: int) -> None:
+    def __init__(self, settings: VectorDBSettings, dim: int,
+                 collection: str | None = None,
+                 share_client_from: "QdrantAdapter | None" = None) -> None:
         from qdrant_client import AsyncQdrantClient
 
         self._settings = settings
         self._dim = dim
+        self._collection = collection or settings.collection
         try:
-            if settings.mode == "server":
+            if share_client_from is not None:
+                # local/memory 模式下同一路径只允许一个客户端(目录锁),
+                # 共享池 adapter 复用私有库的底层 client,仅 collection 不同
+                self._client = share_client_from._client
+            elif settings.mode == "server":
                 self._client = AsyncQdrantClient(url=settings.url)
             elif settings.mode == "local":
                 self._client = AsyncQdrantClient(path=settings.path)
@@ -29,7 +36,7 @@ class QdrantAdapter:
 
     @property
     def collection(self) -> str:
-        return self._settings.collection
+        return self._collection
 
     async def ensure_collection(self) -> None:
         from qdrant_client import models
@@ -99,6 +106,16 @@ class QdrantAdapter:
             )
         except Exception as exc:
             raise LayerError("L2", "qdrant", f"删除失败: {exc}") from exc
+
+    async def get(self, ids: list[str]) -> list[dict[str, Any]]:
+        try:
+            points = await self._client.retrieve(
+                collection_name=self.collection, ids=ids,
+                with_payload=True, with_vectors=True,
+            )
+        except Exception as exc:
+            raise LayerError("L2", "qdrant", f"retrieve 失败: {exc}") from exc
+        return [{"id": str(p.id), "vector": p.vector, "payload": p.payload or {}} for p in points]
 
     async def count(self) -> int:
         try:

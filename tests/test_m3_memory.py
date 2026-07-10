@@ -153,6 +153,7 @@ async def test_m3_mcp_tools_roundtrip(tmp_path):
         "MEMORY_AGENT_MEMORY__EXTRACTION": "verbatim",
         "MEMORY_AGENT_VECTORDB__MODE": "local",
         "MEMORY_AGENT_VECTORDB__PATH": str(tmp_path / "qdrant"),
+        "MEMORY_AGENT_IDENTITY__DIR": str(tmp_path / "identity"),
         "PYTHONPATH": str(PROJECT_ROOT),
     })
     params = StdioServerParameters(
@@ -169,14 +170,22 @@ async def test_m3_mcp_tools_roundtrip(tmp_path):
             names = {t.name for t in tools.tools}
             assert {"memory_store", "memory_search", "memory_consolidate"} <= names
 
+            from core.identity import verify_envelope
+
             stored = await session.call_tool(
                 "memory_store", {"content": "用户的猫叫 Benjamin", "modality": "text"})
             assert not stored.isError
-            assert json.loads(stored.content[0].text)["id"]
+            envelope = json.loads(stored.content[0].text)
+            # M5:所有 MCP 工具响应为身份签名信封,且验签必须通过
+            assert verify_envelope(envelope), f"MCP 响应验签失败: {envelope}"
+            assert envelope["payload"]["id"]
+            assert envelope["identity"]["agent_id"]
 
             result = await session.call_tool("memory_search", {"query": "我的猫叫什么", "k": 3})
             assert not result.isError
-            hits = json.loads(result.content[0].text)
+            envelope = json.loads(result.content[0].text)
+            assert verify_envelope(envelope)
+            hits = envelope["payload"]
             assert isinstance(hits, list) and hits
             for key in ("id", "score", "content", "modality", "meta"):
                 assert key in hits[0]

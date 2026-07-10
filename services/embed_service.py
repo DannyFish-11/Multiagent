@@ -41,7 +41,10 @@ def create_app(config: AppConfig | None = None, embedder: Embedder | None = None
                 f"探针维度 {len(probe[0])} != config 期望 {cfg.embedder.effective_dim}",
             )
         app.state.embedder = emb
-        app.state.proxy = httpx.AsyncClient(base_url=cfg.llm.base_url.rstrip("/"), timeout=cfg.llm.timeout_s)
+        app.state.proxy = httpx.AsyncClient(
+            base_url=cfg.llm.base_url.rstrip("/"), timeout=cfg.llm.timeout_s,
+            headers={"Authorization": f"Bearer {cfg.llm.api_key}"},
+        )
         logger.info("L1 embed service ready: backend=%s dim=%d", cfg.embedder.backend, emb.dim)
         yield
         await app.state.proxy.aclose()

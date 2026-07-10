@@ -6,9 +6,10 @@ import base64
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Modality = Literal["text", "image", "audio"]
+Visibility = Literal["private", "shared"]
 
 
 class Message(BaseModel):
@@ -23,6 +24,15 @@ class MultimodalInput(BaseModel):
     type: Modality
     content: str
     mime: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_base64(self) -> "MultimodalInput":
+        if self.type != "text":
+            try:
+                base64.b64decode(self.content, validate=True)
+            except Exception as exc:
+                raise ValueError(f"{self.type} 内容必须是合法 base64: {exc}") from exc
+        return self
 
     @classmethod
     def text(cls, content: str) -> "MultimodalInput":
@@ -80,6 +90,21 @@ class ChatResponse(BaseModel):
     reply: str
     session_id: str
     memories_used: list[MemoryHit] = Field(default_factory=list)
+    event_id: str | None = None  # M8 埋点事件 id,/feedback 引用
+
+
+class FeedbackRequest(BaseModel):
+    """M8 用户显式反馈(👍/👎)。adopted_memory_ids 标注实际有用的记忆。"""
+
+    event_id: str
+    feedback: Literal["up", "down"]
+    adopted_memory_ids: list[str] = Field(default_factory=list)
+
+
+class PromoteRequest(BaseModel):
+    """M5.3 上交请求:把私有记忆提入共享池(经 PromotionPolicy 决策)。"""
+
+    memory_id: str
 
 
 class MemoryAddRequest(BaseModel):

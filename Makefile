@@ -1,6 +1,6 @@
 # memory-agent 任务入口(BUILD_SPEC §1)
 .PHONY: install up up-gpu down run-embed run-api run-mcp test \
-        verify-m1 verify-m2 verify-m3 verify-m4 verify fixtures
+        verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 verify fixtures
 
 install:
 	uv sync --group dev
@@ -42,5 +42,17 @@ verify-m3:
 verify-m4:
 	uv run pytest tests/test_m4_omnigent.py -v
 
-verify: verify-m1 verify-m2 verify-m3 verify-m4
+verify-m5:
+	uv run pytest tests/test_m5_identity.py -v
+
+verify-m6:
+	uv run pytest tests/test_m6_gmail.py -v
+
+verify-m7:
+	uv run pytest tests/test_m7_memorypack.py -v
+
+verify-m8:
+	uv run pytest tests/test_m8_metabolism.py -v
+
+verify: verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8
 	uv run pytest tests/test_e2e_scenario.py -v

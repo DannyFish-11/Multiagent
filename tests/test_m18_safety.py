@@ -124,6 +124,50 @@ async def test_breaker_stops_dispatch_and_notifies(tmp_path):
     assert any("熔断" in m for m in notifier.messages)
 
 
+def test_single_experiment_ratio_against_remaining_balance():
+    """占比闸门须按**日余额**判定:已花掉大部分额度后,大实验即便未超日额度 N% 也应被拒。"""
+    import tempfile
+    from pathlib import Path
+
+    tmp = Path(tempfile.mkdtemp())
+    breaker = GlobalBreaker(BreakerConfig(global_daily_usd=100.0, single_experiment_max_ratio=0.5),
+                            tmp / "b.json")
+    breaker.record("prev", 80.0, now=0.0)  # 已花 80,余额仅 20
+    # 预算 40:未超日额度的 50%(=50),但超过日余额 20 的 50%(=10)→ 应拒
+    ok, reason = breaker.can_dispatch(40.0, now=0.0)
+    assert not ok and "余额" in reason, reason
+    # 预算 10:恰为余额 20 的 50% → 放行(边界含)
+    assert breaker.can_dispatch(10.0, now=0.0)[0]
+
+
+async def test_oversized_head_does_not_starve_smaller_job(tmp_path):
+    """队列头一个结构性超限的大实验不得永久堵塞后面的小实验(超限=置终态,非停派)。"""
+    notifier = RecordingNotifier()
+    cond, _, _ = make_conductor(tmp_path, notifier, daily=100.0, ratio=0.5, max_vms=2)
+    cond.submit("big", "yaml", budget_usd=60.0, now=0.0)    # 60 > 50%*100 → 结构性拒绝
+    cond.submit("small", "yaml", budget_usd=5.0, now=0.0)   # 应被派发
+    dispatched = await cond.dispatch_ready(now=1.0)
+    assert dispatched == ["small"], dispatched
+    assert cond._jobs["big"].state == "invalid"       # 大实验终态拒绝(带原因),不再堵塞
+    assert cond._jobs["big"].invalid_reasons
+    assert cond._jobs["small"].state == "running"
+    assert any("拒绝 big" in m for m in notifier.messages)
+
+
+async def test_inflight_budget_reservation_prevents_daily_overshoot(tmp_path):
+    """并发预留:两个各 50% 的实验在飞后,第三个即便自身合规也不得再派(否则透支日额度)。"""
+    notifier = RecordingNotifier()
+    # daily=100, ratio=0.5 → 单实验上限 50;max_vms=3 让并发不先于预留触顶
+    cond, _, _ = make_conductor(tmp_path, notifier, daily=100.0, ratio=0.5, max_vms=3)
+    cond.submit("a", "yaml", budget_usd=50.0, now=0.0)
+    cond.submit("b", "yaml", budget_usd=50.0, now=0.0)
+    cond.submit("c", "yaml", budget_usd=1.0, now=0.0)   # 合规但日额度已被 a+b 预留占满
+    dispatched = await cond.dispatch_ready(now=1.0)
+    assert dispatched == ["a", "b"], dispatched
+    assert cond._jobs["c"].state == "queued"   # c 保持排队,待 a/b 收单回收额度后重试
+    assert any("在飞实验预算已占满" in m for m in notifier.messages)
+
+
 # ---------------------------------------------------------------- 18.3 收件箱
 
 async def test_done_notification_has_summary(tmp_path):

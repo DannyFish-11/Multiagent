@@ -52,24 +52,58 @@ class GlobalBreaker:
     def month_total(self, now: float) -> float:
         return self._sum_since(now - 30 * 86400)
 
-    def can_dispatch(self, experiment_budget_usd: float, now: float) -> tuple[bool, str]:
-        """派发新 VM 前调用。返回 (允许?, 原因)。"""
+    def global_cap_hit(self, now: float) -> tuple[bool, str]:
+        """层二全局熔断:日/月总额度触顶 → 应停止一切派发(halt-all)。返回 (触顶?, 原因)。"""
         if self.day_total(now) >= self._cfg.global_daily_usd:
-            return False, (f"全局日额度触顶:${self.day_total(now):.2f} >= "
-                           f"${self._cfg.global_daily_usd:.2f}")
+            return True, (f"全局日额度触顶:${self.day_total(now):.2f} >= "
+                          f"${self._cfg.global_daily_usd:.2f}")
         if self.month_total(now) >= self._cfg.global_monthly_usd:
-            return False, (f"全局月额度触顶:${self.month_total(now):.2f} >= "
-                           f"${self._cfg.global_monthly_usd:.2f}")
-        # 单实验占比闸门:该实验预算不得超过全局日余额的 N%
-        remaining = self._cfg.global_daily_usd - self.day_total(now)
-        if experiment_budget_usd > remaining * self._cfg.single_experiment_max_ratio + 1e-9:
-            # 更严格:也不得超过全局日额度本身的 N%
-            pass
-        cap = self._cfg.global_daily_usd * self._cfg.single_experiment_max_ratio
-        if experiment_budget_usd > cap + 1e-9:
+            return True, (f"全局月额度触顶:${self.month_total(now):.2f} >= "
+                          f"${self._cfg.global_monthly_usd:.2f}")
+        return False, ""
+
+    def exceeds_structural_cap(self, experiment_budget_usd: float) -> tuple[bool, str]:
+        """预算是否超过'全局日额度 × N%'这一**固定**上限。
+
+        超过则该实验在任何余额下都永不可派发(结构性拒绝),调用方应将其置终态而非
+        无限排队。返回 (超限?, 原因)。
+        """
+        total_cap = self._cfg.global_daily_usd * self._cfg.single_experiment_max_ratio
+        if experiment_budget_usd > total_cap + 1e-9:
+            return True, (f"单实验预算 ${experiment_budget_usd:.2f} 超过全局日额度的 "
+                          f"{self._cfg.single_experiment_max_ratio:.0%}(${total_cap:.2f}),结构性拒绝")
+        return False, ""
+
+    def experiment_within_ratio(self, experiment_budget_usd: float,
+                                now: float) -> tuple[bool, str]:
+        """单实验占比闸门:预算不得超过全局日余额的 N%,亦不得超过日额度本身的 N%。
+
+        这是**实验专属、永久性**的判定(实验预算固定,不因等待而变小);不满足时
+        只应跳过该实验,不得据此停派其余队列。返回 (通过?, 原因)。
+        """
+        ratio = self._cfg.single_experiment_max_ratio
+        remaining = max(self._cfg.global_daily_usd - self.day_total(now), 0.0)
+        remaining_cap = remaining * ratio
+        if experiment_budget_usd > remaining_cap + 1e-9:
+            return False, (f"单实验预算 ${experiment_budget_usd:.2f} 超过日余额的 "
+                           f"{ratio:.0%}(${remaining_cap:.2f})")
+        total_cap = self._cfg.global_daily_usd * ratio
+        if experiment_budget_usd > total_cap + 1e-9:
             return False, (f"单实验预算 ${experiment_budget_usd:.2f} 超过全局日额度的 "
-                           f"{self._cfg.single_experiment_max_ratio:.0%}(${cap:.2f})")
+                           f"{ratio:.0%}(${total_cap:.2f})")
         return True, "ok"
+
+    def can_dispatch(self, experiment_budget_usd: float, now: float) -> tuple[bool, str]:
+        """派发新 VM 前的综合判定(全局熔断 + 单实验占比)。返回 (允许?, 原因)。
+
+        注:conductor 派发循环应分别调用 global_cap_hit / experiment_within_ratio,
+        以区分"halt-all"(全局触顶,break)与"skip-this"(单实验超限,continue),
+        避免大预算实验永久堵塞队列头。本方法仅供单点判定/单元测试便捷使用。
+        """
+        hit, why = self.global_cap_hit(now)
+        if hit:
+            return False, why
+        return self.experiment_within_ratio(experiment_budget_usd, now)
 
 
 @dataclass

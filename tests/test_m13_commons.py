@@ -291,6 +291,29 @@ async def test_report_threshold_demotes(tmp_path):
     assert store.browse("memory") == []  # 降级后不可见
 
 
+async def test_widely_adopted_entry_resists_report_brigading(tmp_path):
+    """采用感知降级:被多实例采用的条目不因少量举报(≤采用者数)被打压下架。"""
+    ident = AgentIdentity.load_or_create(tmp_path / "a")
+    store, _ = make_store(tmp_path, {"memory": GraderAdmission(grader_llm(True))},
+                          report_threshold=3)
+    mem = {"content": "被广泛采用的有用记忆"}
+    env = build_envelope(ident, "memory", mem)
+    r = await store.publish(env, mem)
+    # 5 个真实实例采用
+    for i in range(5):
+        await store.adopt(r.entry_id, f"adopter-{i}")
+    # 单一实例连报 3 次达阈值,但 reports(3) 不超过采用者(5) → 不降级
+    for _ in range(3):
+        res = await store.report(r.entry_id, "attacker", "恶意举报")
+    assert res["demoted"] is False
+    assert len(store.browse("memory")) == 1  # 仍在池中可见
+    # 举报累计超过采用者数(6 > 5)后才降级
+    for _ in range(3):
+        res = await store.report(r.entry_id, "attacker", "恶意举报")
+    assert res["demoted"] is True
+    assert store.browse("memory") == []
+
+
 # ---------------------------------------------------------------- ⑤ metrics 端点
 
 async def test_metrics_report_and_purification_primitive(tmp_path):

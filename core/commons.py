@@ -283,7 +283,9 @@ class CommonsStore:
         n = self._metrics.report(entry_id, agent_id, reason)
         rec["envelope"].stats.reports = n
         demoted = False
-        if n >= self._report_threshold:
+        # 采用感知降级:举报数达阈值**且超过采用者数**(should_demote),而非裸计数。
+        # 否则单一实例连报即可打压被众多实例采用的条目(广采条目须更多举报方降级)。
+        if self._metrics.should_demote(entry_id, self._report_threshold):
             rec["envelope"].status = "deprecated"  # 降级待人工复审(browse 不再可见)
             self._metrics.demote(entry_id)
             demoted = True

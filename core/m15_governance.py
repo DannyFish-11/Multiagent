@@ -68,13 +68,23 @@ class ArmResult:
 
 
 async def run_arm(arm: str, items: list[TestItem], store: CommonsStore,
-                  author_identity, natural_selection_reports: dict | None = None) -> ArmResult:
+                  author_identity, natural_selection_reports: dict | None = None,
+                  cost_ledger=None, experiment_id: str = "") -> ArmResult:
     """跑一个对照臂。arm ∈ {grader, vote, natural}。
 
     grader/vote:走 CommonsStore.publish(准入政策已按 arm 装配)。
     natural:全入池(无准入),坏品靠事后 report/降级筛选(natural_selection_reports
     给出每条被举报次数,模拟自然筛选信号)。
+
+    cost_ledger(可选,CostLedger):传入则围绕每次准入判定快照真实花费,累加为
+    result.cost_usd(单条目治理成本)。离线冒烟不传/替身不记账 → 恒 0(即"零真实花费")。
     """
+    def _spend() -> float:
+        if cost_ledger is None:
+            return 0.0
+        return (cost_ledger.experiment_usd(experiment_id) if experiment_id
+                else cost_ledger.today_usd())
+
     result = ArmResult(arm=arm)
     for item in items:
         if item.is_good:
@@ -83,9 +93,11 @@ async def run_arm(arm: str, items: list[TestItem], store: CommonsStore,
             result.total_bad[item.bad_kind] += 1
 
         env = build_envelope(author_identity, "memory", item.content)
+        cost_before = _spend()
         t0 = time.perf_counter()
         published = await store.publish(env, item.content)
         result.decision_latency_ms.append((time.perf_counter() - t0) * 1000)
+        result.cost_usd += max(0.0, _spend() - cost_before)
 
         if arm == "natural":
             # C 臂:全入池,再按模拟举报做自然筛选
@@ -147,5 +159,6 @@ def render_report(seeds_results: dict[int, dict[str, ArmResult]], model_tier: st
         lines.append("")
     lines += ["## 发现", "(冒烟阶段不下结论;满配跑数后由数据支撑或推翻)", "",
               "## 局限", "- 冒烟样本每类仅 2 条,无统计功力;", "- 打分用脚本/便宜档,非正式模型;",
+              "- 单条目治理成本仅在 run_arm 传入 CostLedger 时计量;离线冒烟为 $0(零真实花费);",
               "- 未包含跨实例扩散度长期观测(需长时程实验)。", ""]
     return "\n".join(lines)

@@ -87,6 +87,11 @@ class Conductor:
         return sum(1 for j in self._jobs.values()
                    if j.state in ("provisioning", "running", "verifying"))
 
+    def _inflight_committed(self) -> float:
+        """在飞实验的承诺预算之和(已派发未收数据包);用于并发预留,防日额度透支。"""
+        return sum(j.budget_usd for j in self._jobs.values()
+                   if j.state in ("provisioning", "running", "verifying"))
+
     def queue_view(self) -> list[dict]:
         return [asdict(j) for j in self._jobs.values()]
 
@@ -100,10 +105,28 @@ class Conductor:
                 continue
             if self._running_count() >= self._max_vms:
                 break
-            ok, reason = self._breaker.can_dispatch(job.budget_usd, now)
-            if not ok:
-                await self._notify(f"[熔断] 停止派发 {job.experiment_id}:{reason}")
-                break  # 层二触顶:停止派发新 VM
+            hit, why = self._breaker.global_cap_hit(now)
+            if hit:
+                await self._notify(f"[熔断] 停止派发 {job.experiment_id}:{why}")
+                break  # 层二全局触顶:停止派发新 VM(halt-all)
+            over, why_s = self._breaker.exceeds_structural_cap(job.budget_usd)
+            if over:
+                # 结构性超限(预算 > 日额度 × N%):任何余额下都不可派发 → 置终态,不堵塞队列
+                job.invalid_reasons = [why_s]
+                self._set_state(job, "invalid", now)
+                await self._notify(f"[熔断] 拒绝 {job.experiment_id}(预算超限):{why_s}")
+                continue
+            # 并发预留:已实现花费 + 在飞承诺 + 本实验预算 不得超日额度(防并发透支)
+            committed = self._inflight_committed()
+            if (self._breaker.day_total(now) + committed + job.budget_usd
+                    > self._breaker._cfg.global_daily_usd + 1e-9):  # noqa: SLF001
+                await self._notify(f"[熔断] 暂缓 {job.experiment_id}:在飞实验预算已占满日额度")
+                continue  # 该实验放不下,保持 queued;待在飞实验收单后重试
+            within, why2 = self._breaker.experiment_within_ratio(job.budget_usd, now)
+            if not within:
+                # 瞬时占比超限(按当前日余额):保持 queued,下轮额度回收后重试
+                await self._notify(f"[熔断] 暂缓 {job.experiment_id}:{why2}")
+                continue
             secrets = secrets_for(job) if secrets_for else {}
             cloud_init = build_cloud_init(
                 job.yaml_text, self._image,

@@ -48,6 +48,11 @@ memory:  # L2
     # SimpleMem 的 LLM+文本嵌入共用一个 OpenAI 兼容 base_url,
     # 指向本项目 L1 服务的网关路由(chat→L0, embeddings→L1),见 services/embed_service.py
     gateway_base_url: http://localhost:8001/v1
+  # M5.3 私有/共享分区:共享池为独立 collection,多实例可挂同一池(经 MCP 远程挂载)
+  shared_collection: memories_shared
+  promotion:
+    policy: manual        # manual(人工确认) | grader(LLM 评分);第三实现位留给群体投票
+    grader_threshold: 0.7
 
 services:
   embed_host: 0.0.0.0
@@ -60,3 +65,23 @@ agent:
   system_prompt: |
     你是一个拥有长期记忆的助手。下面的「相关记忆」是你从过往交互中检索到的内容,
     回答时优先利用这些记忆;若记忆与问题无关则忽略。
+
+# ---------------- PHASE 2 ----------------
+
+identity:  # M5.1:agent_id 终身不变;私钥 600;记忆库目录随 agent_id
+  dir: ./data/identity
+
+a2a:  # M5.2:A2A v1.0(a2a-sdk ~=1.0.3);enabled=false 时不启动 server
+  enabled: false
+  host: 0.0.0.0
+  port: 8003
+  base_url: http://localhost:8003
+
+gmail:  # M6.1:现成 Gmail MCP server(不自研 OAuth);治理分级见 omnigent_policies
+  enabled: false
+  mcp_command: npx
+  mcp_args: ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
+
+metabolism:  # M8:埋点与离线代谢实验(手动触发,只出建议不自动应用)
+  events_path: ./logs/retrieval_events.jsonl
+  report_dir: ./reports

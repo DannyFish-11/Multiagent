@@ -46,17 +46,28 @@ class QdrantMemoryStore:
     - consolidate(): 余弦相似聚类 + L0 合并改写
     """
 
-    def __init__(self, embedder: Embedder, llm: LLMClient, db: QdrantAdapter, config: AppConfig) -> None:
+    def __init__(self, embedder: Embedder, llm: LLMClient, db: QdrantAdapter, config: AppConfig,
+                 shared_db: QdrantAdapter | None = None) -> None:
         self._embedder = embedder
         self._llm = llm
         self._db = db
+        self._shared_db = shared_db  # M5.3 共享池(独立 collection,多实例可挂同一池)
         self._config = config
         self._ready = False
 
     async def _ensure_ready(self) -> None:
         if not self._ready:
             await self._db.ensure_collection()
+            if self._shared_db is not None:
+                await self._shared_db.ensure_collection()
             self._ready = True
+
+    def _target_db(self, visibility: str) -> QdrantAdapter:
+        if visibility == "shared":
+            if self._shared_db is None:
+                raise LayerError("L2", "memory", "visibility=shared 但未配置共享池")
+            return self._shared_db
+        return self._db
 
     async def _extract_facts(self, text: str) -> list[str]:
         if self._config.memory.extraction == "verbatim":
@@ -83,25 +94,28 @@ class QdrantMemoryStore:
     async def add(self, content: MultimodalInput, meta: dict) -> str:
         await self._ensure_ready()
         now = time.time()
+        visibility = meta.get("visibility", "private")  # M5.3:默认 private
+        meta = dict(meta, visibility=visibility)
+        db = self._target_db(visibility)
         base_payload = {"modality": content.type, "meta": meta, "created_at": now}
 
         if content.type == "text":
             facts = await self._extract_facts(content.content)
             vectors = await self._embedder.embed([MultimodalInput.text(f) for f in facts])
             payloads = [dict(base_payload, content=f) for f in facts]
-            ids = await self._db.upsert(vectors, payloads)
+            ids = await db.upsert(vectors, payloads)
             return ids[0]
 
         # image / audio:原始内容向量入库
         vectors = await self._embedder.embed([content])
         display = meta.get("caption") or f"[{content.type} memory]"
         payloads = [dict(base_payload, content=display, raw_base64=content.content, mime=content.mime)]
-        ids = await self._db.upsert(vectors, payloads)
+        ids = await db.upsert(vectors, payloads)
         # caption 另存文本点,保证纯文本检索(含 fake 后端下的插件化测试)也能命中
         caption = meta.get("caption")
         if caption:
             cap_vec = await self._embedder.embed([MultimodalInput.text(caption)])
-            await self._db.upsert(
+            await db.upsert(
                 cap_vec,
                 [{
                     "modality": content.type, "content": caption, "created_at": now,
@@ -111,9 +125,14 @@ class QdrantMemoryStore:
         return ids[0]
 
     async def search(self, query: MultimodalInput, k: int = 5) -> list[MemoryHit]:
+        """检索私有库;配置了共享池时并查共享池,按分数合并取前 k。"""
         await self._ensure_ready()
         vec = (await self._embedder.embed([query]))[0]
         raw = await self._db.search(vec, k=k)
+        if self._shared_db is not None:
+            raw = raw + await self._shared_db.search(vec, k=k)
+            raw.sort(key=lambda r: r["score"], reverse=True)
+            raw = raw[:k]
         hits = []
         for r in raw:
             p = r["payload"]
@@ -124,6 +143,26 @@ class QdrantMemoryStore:
                 meta=p.get("meta", {}),
             ))
         return hits
+
+    async def dump_all(self) -> list[dict]:
+        """导出私有库全量点(MemoryPack 使用;共享池不随包迁移)。"""
+        await self._ensure_ready()
+        return await self._db.scroll_all()
+
+    async def promote(self, memory_id: str) -> str:
+        """把一条私有记忆复制进共享池(上交)。返回共享池中的新 id。"""
+        await self._ensure_ready()
+        if self._shared_db is None:
+            raise LayerError("L2", "memory", "未配置共享池,无法上交记忆")
+        points = await self._db.get([memory_id])
+        if not points:
+            raise LayerError("L2", "memory", f"记忆不存在: {memory_id}")
+        p = points[0]
+        payload = dict(p["payload"])
+        payload["meta"] = dict(payload.get("meta", {}), visibility="shared",
+                               promoted_from=memory_id)
+        ids = await self._shared_db.upsert([p["vector"]], [payload])
+        return ids[0]
 
     async def consolidate(self) -> ConsolidationReport:
         await self._ensure_ready()

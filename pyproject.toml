@@ -15,6 +15,8 @@ dependencies = [
     "pyyaml>=6.0",
     "pillow>=10.0",
     "numpy>=1.26",
+    "cryptography>=42.0",
+    "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,10 @@ local-embed = [
     "transformers>=4.45",
     "sentence-transformers>=3.0",
     "soundfile>=0.12",
+]
+# A2A 协议接入(M5;锁定 v1.0 stable 线)
+a2a = [
+    "a2a-sdk~=1.0.3",
 ]
 # Extra deps required by the Omni-SimpleMem backend (upstream package).
 simplemem = [

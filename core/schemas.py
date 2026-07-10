@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 Modality = Literal["text", "image", "audio"]
+Visibility = Literal["private", "shared"]
 
 
 class Message(BaseModel):
@@ -80,6 +81,21 @@ class ChatResponse(BaseModel):
     reply: str
     session_id: str
     memories_used: list[MemoryHit] = Field(default_factory=list)
+    event_id: str | None = None  # M8 埋点事件 id,/feedback 引用
+
+
+class FeedbackRequest(BaseModel):
+    """M8 用户显式反馈(👍/👎)。adopted_memory_ids 标注实际有用的记忆。"""
+
+    event_id: str
+    feedback: Literal["up", "down"]
+    adopted_memory_ids: list[str] = Field(default_factory=list)
+
+
+class PromoteRequest(BaseModel):
+    """M5.3 上交请求:把私有记忆提入共享池(经 PromotionPolicy 决策)。"""
+
+    memory_id: str
 
 
 class MemoryAddRequest(BaseModel):

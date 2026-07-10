@@ -12,9 +12,12 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from adapters.a2a import build_signed_card
 from adapters.embedder import RemoteEmbedderAdapter, build_embedder
 from adapters.llm import VLLMOpenAIAdapter
 from core.agent import MemoryAgent
+from core.identity import AgentIdentity
+from core.metabolism import RetrievalLogger
 from core.config import AppConfig, load_config
 from core.errors import LayerError
 from core.factory import build_memory_store
@@ -22,12 +25,14 @@ from core.schemas import (
     ChatRequest,
     ChatResponse,
     ConsolidationReport,
+    FeedbackRequest,
     HealthReport,
     MemoryAddRequest,
     MemoryAddResponse,
     MemoryHit,
     MemorySearchRequest,
     MultimodalInput,
+    PromoteRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +68,14 @@ def create_app(
         app.state.llm = _llm
         app.state.memory = _memory
         app.state.agent = MemoryAgent(_llm, _memory, cfg)
-        logger.info("L3 api ready: memory.backend=%s", cfg.memory.backend)
+        # M5 身份(终身不变;记忆库随 agent_id 绑定)
+        app.state.identity = AgentIdentity.load_or_create(cfg.identity.dir)
+        app.state.signed_card = build_signed_card(app.state.identity, cfg.a2a.base_url)
+        # M8 埋点
+        app.state.retrieval_logger = RetrievalLogger(cfg.metabolism.events_path)
+        app.state.agent.set_retrieval_logger(app.state.retrieval_logger)
+        logger.info("L3 api ready: memory.backend=%s agent_id=%s",
+                    cfg.memory.backend, app.state.identity.agent_id)
         yield
         await app.state.agent.drain()
 
@@ -108,6 +120,28 @@ def create_app(
     @app.post("/memory/consolidate", response_model=ConsolidationReport)
     async def memory_consolidate():
         return await app.state.memory.consolidate()
+
+    # ---- PHASE 2 ----
+
+    @app.get("/identity/card")
+    async def identity_card():
+        """签名 Agent Card(M5.2;A2AClientAdapter.fetch_and_verify_card 消费)。"""
+        return app.state.signed_card
+
+    @app.post("/memory/promote")
+    async def memory_promote(req: PromoteRequest):
+        """上交一条私有记忆到共享池(M5.3)。策略决策由调用方先行完成。"""
+        if not hasattr(app.state.memory, "promote"):
+            return JSONResponse(status_code=400, content={"error": "当前后端不支持共享池"})
+        shared_id = await app.state.memory.promote(req.memory_id)
+        return {"shared_id": shared_id}
+
+    @app.post("/feedback")
+    async def feedback(req: FeedbackRequest):
+        """M8 用户显式反馈(👍/👎),写入检索事件日志供代谢实验回放。"""
+        ok = app.state.retrieval_logger.set_feedback(
+            req.event_id, req.feedback, req.adopted_memory_ids)
+        return {"recorded": ok}
 
     return app
 

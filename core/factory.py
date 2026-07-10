@@ -36,7 +36,11 @@ def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
         embedder = embedder or build_embedder(config.embedder)
         llm = llm or build_llm(config)
         db = QdrantAdapter(config.vectordb, dim=config.embedder.effective_dim)
-        return QdrantMemoryStore(embedder, llm, db, config)
+        shared_db = QdrantAdapter(
+            config.vectordb, dim=config.embedder.effective_dim,
+            collection=config.memory.shared_collection, share_client_from=db,
+        )
+        return QdrantMemoryStore(embedder, llm, db, config, shared_db=shared_db)
     raise LayerError("L2", "factory", f"未知 memory.backend: {config.memory.backend}")
 
 
@@ -53,3 +57,13 @@ def build_agent(config: AppConfig, llm: LLMClient | None = None,
     llm = llm or build_llm(config)
     memory = memory or get_shared_memory_store(config)
     return MemoryAgent(llm, memory, config)
+
+
+def get_identity(config: AppConfig | None = None):
+    """进程级单例身份(M5)。身份终身不变;换脑不换身份。"""
+    if "identity" not in _singletons:
+        from core.identity import AgentIdentity
+
+        cfg = config or get_config()
+        _singletons["identity"] = AgentIdentity.load_or_create(cfg.identity.dir)
+    return _singletons["identity"]

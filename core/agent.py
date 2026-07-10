@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
 from core.config import AppConfig
@@ -28,6 +29,11 @@ class MemoryAgent:
         self._memory = memory
         self._config = config
         self._pending: set[asyncio.Task] = set()
+        # M8 埋点:检索事件日志(可选注入;None 时不记录)
+        self._retrieval_logger = None
+
+    def set_retrieval_logger(self, logger_) -> None:
+        self._retrieval_logger = logger_
 
     def _build_system_prompt(self, hits: list[MemoryHit]) -> str:
         return (
@@ -58,6 +64,13 @@ class MemoryAgent:
         query = MultimodalInput.text(message)
         hits = await self._memory.search(query, k=self._config.agent.top_k)
 
+        event_id = uuid.uuid4().hex
+        if self._retrieval_logger is not None:
+            from core.metabolism import RetrievalEvent
+
+            self._retrieval_logger.log(RetrievalEvent(
+                query=message, hit_ids=[h.id for h in hits], event_id=event_id))
+
         user_content: str | list[dict] = message
         if image is not None:
             user_content = [
@@ -79,7 +92,8 @@ class MemoryAgent:
             self._pending.add(task)
             task.add_done_callback(self._pending.discard)
 
-        return ChatResponse(reply=reply, session_id=session_id, memories_used=hits)
+        return ChatResponse(reply=reply, session_id=session_id, memories_used=hits,
+                            event_id=event_id)
 
     async def drain(self) -> None:
         """等待所有后台记忆写入完成(优雅停机/测试用)。"""

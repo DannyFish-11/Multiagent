@@ -1,0 +1,10 @@
+# Gmail MCP server 挂载(M6.1)。
+# 评估结论(README M6):采用社区主流实现 @gongrzhe/server-gmail-autoauth-mcp
+# (自带 OAuth 流程,不自研;凭证经其标准流程落在 ~/.gmail-mcp/)。
+# 治理分级由 omnigent_policies/gmail_governance.py 强制:
+#   read/search/summarize/draft → allow;send/delete/archive → 每次 ask。
+name: gmail
+transport: stdio
+command: npx
+args: ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
+env: {}

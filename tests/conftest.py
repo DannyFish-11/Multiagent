@@ -55,10 +55,15 @@ def requires_live(url: str, name: str):
 
 
 def make_fake_config(tmp_path: Path | None = None, vect_mode: str = "memory") -> AppConfig:
+    import tempfile
+
+    from core.config import IdentitySettings, MetabolismSettings
+
     vdb = VectorDBSettings(mode=vect_mode, collection="test_memories")  # type: ignore[arg-type]
     if vect_mode == "local":
         assert tmp_path is not None
         vdb = VectorDBSettings(mode="local", path=str(tmp_path / "qdrant"), collection="test_memories")
+    scratch = Path(tmp_path) if tmp_path is not None else Path(tempfile.mkdtemp(prefix="ma-test-"))
     return AppConfig(
         llm=LLMSettings(base_url="http://127.0.0.1:1/v1", model="test-model"),
         embedder=EmbedderSettings(backend="fake", dim=64, model_name="fake-deterministic"),
@@ -66,6 +71,9 @@ def make_fake_config(tmp_path: Path | None = None, vect_mode: str = "memory") ->
         memory=MemorySettings(extraction="verbatim"),
         services=ServiceSettings(),
         agent=AgentSettings(top_k=5),
+        identity=IdentitySettings(dir=str(scratch / "identity")),
+        metabolism=MetabolismSettings(events_path=str(scratch / "logs" / "events.jsonl"),
+                                      report_dir=str(scratch / "reports")),
     )
 
 

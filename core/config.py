@@ -64,11 +64,19 @@ class SimpleMemSettings(BaseModel):
     gateway_base_url: str = "http://localhost:8001/v1"
 
 
+class PromotionSettings(BaseModel):
+    policy: Literal["manual", "grader"] = "manual"
+    grader_threshold: float = 0.7
+
+
 class MemorySettings(BaseModel):
     backend: Literal["qdrant", "simplemem"] = "qdrant"
     extraction: Literal["llm", "verbatim"] = "llm"
     consolidation: ConsolidationSettings = Field(default_factory=ConsolidationSettings)
     simplemem: SimpleMemSettings = Field(default_factory=SimpleMemSettings)
+    # M5.3 私有/共享分区:共享池为独立 collection,多实例可挂同一池
+    shared_collection: str = "memories_shared"
+    promotion: PromotionSettings = Field(default_factory=PromotionSettings)
 
 
 class ServiceSettings(BaseModel):
@@ -81,6 +89,29 @@ class ServiceSettings(BaseModel):
 class AgentSettings(BaseModel):
     top_k: int = 5
     system_prompt: str = "你是一个拥有长期记忆的助手。"
+
+
+class IdentitySettings(BaseModel):
+    dir: str = "./data/identity"
+
+
+class A2ASettings(BaseModel):
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8003
+    base_url: str = "http://localhost:8003"
+
+
+class GmailSettings(BaseModel):
+    enabled: bool = False
+    # 现成 Gmail MCP server(评估结论见 README M6):不自研 OAuth
+    mcp_command: str = "npx"
+    mcp_args: list[str] = Field(default_factory=lambda: ["-y", "@gongrzhe/server-gmail-autoauth-mcp"])
+
+
+class MetabolismSettings(BaseModel):
+    events_path: str = "./logs/retrieval_events.jsonl"
+    report_dir: str = "./reports"
 
 
 class AppConfig(BaseSettings):
@@ -97,6 +128,10 @@ class AppConfig(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     services: ServiceSettings = Field(default_factory=ServiceSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    identity: IdentitySettings = Field(default_factory=IdentitySettings)
+    a2a: A2ASettings = Field(default_factory=A2ASettings)
+    gmail: GmailSettings = Field(default_factory=GmailSettings)
+    metabolism: MetabolismSettings = Field(default_factory=MetabolismSettings)
 
     @classmethod
     def settings_customise_sources(

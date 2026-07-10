@@ -260,19 +260,25 @@ def build_llm_client(config, role: str = "chat", ledger=None):
     mode=local → VLLMOpenAIAdapter(PHASE 1 路径,一键切回)
     mode=api   → OpenAICompatAdapter(chat / memory 双角色可分开配置)
     mode=echo  → EchoLLM(M20 A1 离线 demo 档,零 key 验证记忆闭环)
+
+    M20 B:返回前经 instrument_llm 包裹(observability.enabled=false 时原样返回)。
     """
+    from adapters.observability import instrument_llm
+
     if config.llm.mode == "echo":
-        return EchoLLM()
-    if config.llm.mode == "api":
+        client = EchoLLM()
+    elif config.llm.mode == "api":
         role_cfg = config.llm.memory if role == "memory" else config.llm.chat
         # memory 角色未配置时回落到 chat 角色(允许同一端点)
         if role == "memory" and not role_cfg.base_url:
             role_cfg = config.llm.chat
-        return OpenAICompatAdapter(role_cfg, ledger=ledger)
-    return VLLMOpenAIAdapter(
-        base_url=config.llm.base_url, model=config.llm.model,
-        api_key=config.llm.api_key, timeout_s=config.llm.timeout_s,
-    )
+        client = OpenAICompatAdapter(role_cfg, ledger=ledger)
+    else:
+        client = VLLMOpenAIAdapter(
+            base_url=config.llm.base_url, model=config.llm.model,
+            api_key=config.llm.api_key, timeout_s=config.llm.timeout_s,
+        )
+    return instrument_llm(client, config)
 
 
 def build_ledger(config):

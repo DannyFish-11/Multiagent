@@ -37,17 +37,23 @@ def build_llm(config: AppConfig, role: str = "chat") -> LLMClient:
 
 def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
                        llm: LLMClient | None = None) -> MemoryStore:
+    # M20 B:检索/写入步骤埋点(observability.enabled=false 时 instrument_* 原样返回)。
+    # 埋点逻辑全在 adapters.observability;此处仅调用,不改签名、不引入依赖。
+    from adapters.observability import instrument_embedder, instrument_memory
+
     if config.memory.backend == "simplemem":
-        return SimpleMemAdapter(config)
+        return instrument_memory(SimpleMemAdapter(config), config)
     if config.memory.backend == "qdrant":
         embedder = embedder or build_embedder(config.embedder, ledger=get_ledger(config))
+        embedder = instrument_embedder(embedder, config)
         llm = llm or build_llm(config, role="memory")
         db = QdrantAdapter(config.vectordb, dim=config.embedder.effective_dim)
         shared_db = QdrantAdapter(
             config.vectordb, dim=config.embedder.effective_dim,
             collection=config.memory.shared_collection, share_client_from=db,
         )
-        return QdrantMemoryStore(embedder, llm, db, config, shared_db=shared_db)
+        store = QdrantMemoryStore(embedder, llm, db, config, shared_db=shared_db)
+        return instrument_memory(store, config)
     raise LayerError("L2", "factory", f"未知 memory.backend: {config.memory.backend}")
 
 

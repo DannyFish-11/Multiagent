@@ -9,3 +9,4 @@ omni_memory_data/
 dist/
 .upstream/
 .env
+.env.observability

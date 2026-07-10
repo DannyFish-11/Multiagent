@@ -207,7 +207,8 @@ class QdrantMemoryStore:
             await self._db.upsert(
                 [vec],
                 [{"modality": "text", "content": merged, "created_at": time.time(),
-                  "meta": {"kind": "consolidated", "source_count": len(group)}}],
+                  "meta": {"kind": "consolidated", "source_count": len(group),
+                           "visibility": "private"}}],
             )
             merged_groups += 1
             pruned += len(group) - 1

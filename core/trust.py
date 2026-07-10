@@ -33,17 +33,26 @@ class TrustStore:
             {"kind": TRUST_KIND, "trusted_agent_id": agent_id, "visibility": "private"},
         )
 
-    async def is_trusted(self, agent_id: str) -> bool:
-        hits = await self._memory.search(MultimodalInput.text(self._entry_text(agent_id)), k=10)
-        return any(
-            h.meta.get("kind") == TRUST_KIND and h.meta.get("trusted_agent_id") == agent_id
-            for h in hits
-        )
-
-    async def audit(self) -> list[dict]:
-        """列出全部白名单记忆(可审计)。"""
+    async def _scan_entries(self) -> list[dict]:
+        """白名单判定必须精确:后端支持 dump_all 时全量扫描;否则退化为向量检索。"""
+        if hasattr(self._memory, "dump_all"):
+            points = await self._memory.dump_all()
+            return [
+                {"memory_id": p["id"],
+                 "agent_id": p["payload"].get("meta", {}).get("trusted_agent_id"),
+                 "content": p["payload"].get("content", "")}
+                for p in points
+                if p["payload"].get("meta", {}).get("kind") == TRUST_KIND
+            ]
         hits = await self._memory.search(MultimodalInput.text("信任白名单 A2A 任务委托"), k=50)
         return [
             {"memory_id": h.id, "agent_id": h.meta.get("trusted_agent_id"), "content": h.content}
             for h in hits if h.meta.get("kind") == TRUST_KIND
         ]
+
+    async def is_trusted(self, agent_id: str) -> bool:
+        return any(e["agent_id"] == agent_id for e in await self._scan_entries())
+
+    async def audit(self) -> list[dict]:
+        """列出全部白名单记忆(可审计)。"""
+        return await self._scan_entries()

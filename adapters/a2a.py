@@ -136,11 +136,13 @@ class A2AServerAdapter:
                 {"status": "rejected", "reason": f"不支持的 skill: {skill}"})
 
         if skill in ("memory_search", "multimodal_recall"):
-            query = params.get("query", "")
-            k = int(params.get("k", 5))
+            query = str(params.get("query", ""))
+            try:
+                k = max(1, min(50, int(params.get("k", 5))))
+            except (TypeError, ValueError):
+                k = 5
             hits = await self._memory.search(MultimodalInput.text(query), k=k)
-            # 委托方只能看到共享池与显式 shared 的结果之外?——本阶段策略:
-            # 仅返回 visibility=shared 的记忆,私有记忆不外泄
+            # 本阶段外泄策略:仅返回 visibility=shared 的记忆,私有记忆绝不外泄
             shared_hits = [h.model_dump() for h in hits if h.meta.get("visibility") == "shared"]
             return self._identity.signed_envelope(
                 {"status": "ok", "skill": skill, "hits": shared_hits})
@@ -148,19 +150,18 @@ class A2AServerAdapter:
         return self._identity.signed_envelope(
             {"status": "rejected", "reason": "chat 委托须经宿主(Omnigent)会话通道"})
 
-    def serve(self, host: str, port: int) -> None:  # pragma: no cover - 需 a2a extra + 目标机器
+    def build_proto_card(self):
+        """dict card → a2a-sdk 1.0.3 proto AgentCard(字段以其 a2a_pb2 实际定义为准:
+        无 url 顶层字段,端点挂在 supported_interfaces;签名为 AgentCardSignature)。"""
         a2a_types = _require_sdk()
-        import uvicorn
-        from a2a.server.agent_execution import AgentExecutor
-        from a2a.server.apps import A2AStarletteApplication  # type: ignore[attr-defined]
-
         card_dict = self.signed_card["card"]
-        proto_card = a2a_types.AgentCard(
-            protocol_version="1.0",
+        return a2a_types.AgentCard(
             name=card_dict["name"],
             description=card_dict["description"],
-            url=card_dict["url"],
             version="1.0.0",
+            supported_interfaces=[a2a_types.AgentInterface(
+                url=card_dict["url"], protocol_binding="JSONRPC", protocol_version="1.0",
+            )],
             skills=[a2a_types.AgentSkill(id=s, name=s, description=s, tags=[s])
                     for s in card_dict["skills"]],
             signatures=[a2a_types.AgentCardSignature(
@@ -168,6 +169,20 @@ class A2AServerAdapter:
                 signature=self.signed_card["signatures"][0]["signature"],
             )],
         )
+
+    def build_app(self):
+        """组装 a2a-sdk 1.0.3 的 Starlette 应用(JSONRPC 方法 SendMessage +
+        /.well-known/agent-card.json)。可直接被测试客户端驱动,serve() 仅负责起端口。"""
+        a2a_types = _require_sdk()
+        import uuid as _uuid
+
+        from a2a.server.agent_execution import AgentExecutor
+        from a2a.server.request_handlers import DefaultRequestHandler
+        from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+        from a2a.server.tasks import InMemoryTaskStore
+        from starlette.applications import Starlette
+
+        proto_card = self.build_proto_card()
         adapter = self
 
         class _Executor(AgentExecutor):  # type: ignore[misc]
@@ -180,16 +195,25 @@ class A2AServerAdapter:
                 result = await adapter.handle_task(
                     req.get("skill", "memory_search"), req.get("params", {}),
                     req.get("from_agent_id"))
-                from a2a.utils import new_agent_text_message  # type: ignore[attr-defined]
-
-                await event_queue.enqueue_event(
-                    new_agent_text_message(json.dumps(result, ensure_ascii=False)))
+                await event_queue.enqueue_event(a2a_types.Message(
+                    message_id=_uuid.uuid4().hex,
+                    role=a2a_types.Role.ROLE_AGENT,
+                    parts=[a2a_types.Part(text=json.dumps(result, ensure_ascii=False))],
+                ))
 
             async def cancel(self, context, event_queue):  # noqa: ANN001
                 raise NotImplementedError
 
-        app = A2AStarletteApplication(agent_card=proto_card, executor=_Executor())
-        uvicorn.run(app.build(), host=host, port=port)
+        handler = DefaultRequestHandler(
+            agent_executor=_Executor(), task_store=InMemoryTaskStore(), agent_card=proto_card,
+        )
+        routes = create_agent_card_routes(proto_card) + create_jsonrpc_routes(handler, rpc_url="/")
+        return Starlette(routes=routes)
+
+    def serve(self, host: str, port: int) -> None:  # pragma: no cover - 起端口属部署动作
+        import uvicorn
+
+        uvicorn.run(self.build_app(), host=host, port=port)
 
 
 # ---------------------------------------------------------------- 客户端
@@ -219,10 +243,34 @@ class A2AClientAdapter:
             "skill": skill, "params": params, "from_agent_id": self._identity.agent_id,
         })
 
-    async def delegate_via_sdk(self, card_url: str, skill: str,
-                               params: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
-        """经 a2a-sdk 正式通道委托(需 --extra a2a,目标机器验证)。"""
-        _require_sdk()
-        from a2a.client import ClientFactory  # noqa: F401  # 实际组装在目标机器冒烟时完成
+    async def delegate(self, rpc_url: str, skill: str, params: dict[str, Any],
+                       transport=None) -> dict[str, Any]:
+        """经 A2A v1.0 JSONRPC 通道(SendMessage)发起带签名的任务委托。
 
-        raise LayerError("L5", "a2a-client", "SDK 通道的端到端联调属目标机器冒烟项(M5 验收③)")
+        返回对方的签名信封(调用方应以 verify_envelope 验签)。
+        transport 参数供测试注入 ASGITransport。
+        """
+        import uuid as _uuid
+
+        import httpx
+
+        delegation = self.build_delegation(skill, params)["payload"]
+        body = {
+            "jsonrpc": "2.0", "id": _uuid.uuid4().hex, "method": "SendMessage",
+            "params": {"message": {
+                "messageId": _uuid.uuid4().hex, "role": "ROLE_USER",
+                "parts": [{"text": json.dumps(delegation, ensure_ascii=False)}],
+            }},
+        }
+        async with httpx.AsyncClient(transport=transport, timeout=60) as client:
+            resp = await client.post(rpc_url, json=body, headers={"A2A-Version": "1.0"})
+        if resp.status_code != 200:
+            raise LayerError("L5", "a2a-client", f"委托失败 HTTP {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        if "error" in data:
+            raise LayerError("L5", "a2a-client", f"JSONRPC 错误: {data['error']}")
+        try:
+            parts = data["result"]["message"]["parts"]
+            return json.loads(parts[0]["text"])
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise LayerError("L5", "a2a-client", f"响应结构异常: {data}") from exc

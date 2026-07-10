@@ -109,11 +109,13 @@ simplemem 后端、是否向上游提修复 PR,由人类决策。
 ### PHASE 2(四条进化线,PHASE2_SPEC)
 
 - **M5 身份 + A2A + 记忆分区**:`core/identity.py`(UUID v7 / Ed25519 私钥 600 /
-  lineage / profile 含 payments 预留);`adapters/a2a.py`(a2a-sdk ~=1.0.3,
-  签名 Agent Card 与 JWS 结构对齐其 AgentCardSignature);MCP 全部响应改为
-  身份签名信封;visibility private|shared 双 collection 分区 + `promote` 上交;
-  PromotionPolicy(Grader/Manual,第三位留群体投票);信任白名单即记忆
-  (`core/trust.py`,可检索可审计)。SDK 通道端到端联调属目标机器冒烟。
+  公私钥一致性校验 / lineage / profile 含 payments 预留);`adapters/a2a.py`
+  (a2a-sdk ~=1.0.3,签名 Agent Card 与 JWS 结构对齐其 AgentCardSignature);
+  MCP 全部响应改为身份签名信封;visibility private|shared 双 collection 分区 +
+  `promote` 上交;PromotionPolicy(Grader/Manual,第三位留群体投票);信任白名单
+  即记忆(`core/trust.py`,dump_all 精确扫描)。**SDK 通道已离线全链路冒烟**:
+  经其真实 JSONRPC 栈(SendMessage + A2A-Version: 1.0 + well-known 签名卡片)
+  完成白名单委托/未知拒绝双路径,客户端 `A2AClientAdapter.delegate` 可用。
 - **M6 行动层**:Gmail 经现成 MCP server 挂载(`@gongrzhe/server-gmail-autoauth-mcp`,
   社区主流、自带 OAuth,评估记录于此,不自研);治理分级
   `omnigent_policies/gmail_governance.py`(read/draft 放行,send/delete/archive
@@ -127,7 +129,7 @@ simplemem 后端、是否向上游提修复 PR,由人类决策。
   `python -m core.metabolism` 离线网格实验(手动触发),产出报告 + 建议 config
   diff;**只建议不应用**(负向测试确认无写代码/自动应用路径)。
 
-PHASE 2 测试:47 通过 / 9 跳过(跳过者为需真实 GPU 服务的 PHASE 1 规格验收)。
+PHASE 2 测试:51 通过 / 9 跳过(跳过者为需真实 GPU 服务的 PHASE 1 规格验收)。
 
 ## MCP server
 

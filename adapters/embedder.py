@@ -89,7 +89,7 @@ class JinaV5OmniAdapter:
         if self._model is not None:
             return self._model
         try:
-            import torch  # noqa: F401
+            import torch
             from transformers import AutoModel
         except ImportError as exc:
             raise LayerError(
@@ -98,7 +98,6 @@ class JinaV5OmniAdapter:
             ) from exc
         device = self._settings.device
         if device == "auto":
-            import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
             self._model = AutoModel.from_pretrained(
@@ -238,7 +237,15 @@ class JinaAPIAdapter:
         if resp.status_code != 200:
             raise LayerError("L1", "jina-api", f"HTTP {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
-        return [truncate_and_normalize(d["embedding"], None) for d in data["data"]]
+        vectors = [truncate_and_normalize(d["embedding"], None) for d in data["data"]]
+        for v in vectors:
+            if len(v) != self._dim:
+                raise LayerError(
+                    "L1", "jina-api",
+                    f"API 返回维度 {len(v)} != config 期望 {self._dim}"
+                    "(dimensions 参数可能未生效,检查模型名与 matryoshka_dim)",
+                )
+        return vectors
 
 
 def build_embedder(settings: EmbedderSettings) -> Embedder:

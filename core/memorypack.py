@@ -250,7 +250,6 @@ def main() -> int:  # pragma: no cover - 组装层,逻辑均有单测
     import argparse
     import asyncio
 
-    from adapters.embedder import build_embedder
     from core.factory import build_llm, get_config, get_identity, get_shared_memory_store
 
     parser = argparse.ArgumentParser(prog="memorypack")
@@ -265,6 +264,8 @@ def main() -> int:  # pragma: no cover - 组装层,逻辑均有单测
     cfg = get_config()
     identity = get_identity(cfg)
     store = get_shared_memory_store(cfg)
+    if not hasattr(store, "dump_all"):
+        raise SystemExit("memorypack 需要 qdrant 后端(当前 memory.backend 不支持全量导出)")
     mgr = MemoryPackManager(store, identity,
                             cfg.embedder.model_name, cfg.embedder.effective_dim)
 

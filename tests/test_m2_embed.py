@@ -130,3 +130,12 @@ def test_healthz(embed_client):
     assert data["status"] == "ok"
     assert data["layer"] == "L1"
     assert data["dim"] == 64
+
+
+def test_gateway_chat_proxy_reports_l0_when_llm_down(embed_client):
+    """网关 /v1/chat/completions:L0 不可达时错误必须指明 L0 层(fail-fast 边界)。"""
+    resp = embed_client.post("/v1/chat/completions", json={
+        "model": "gemma-4", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["layer"] == "L0"

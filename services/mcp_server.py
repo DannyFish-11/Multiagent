@@ -62,9 +62,11 @@ async def memory_consolidate() -> str:
 async def memory_promote(memory_id: str) -> str:
     """把一条私有记忆上交到共享池(M5.3)。返回签名信封 JSON,payload 为
     {"shared_id": "..."}。上交决策应先经 PromotionPolicy(grader/manual)。"""
+    from core.errors import LayerError
+
     store = get_shared_memory_store()
     if not hasattr(store, "promote"):
-        raise RuntimeError("当前 memory backend 不支持共享池上交")
+        raise LayerError("L2", "mcp", "当前 memory backend 不支持共享池上交")
     shared_id = await store.promote(memory_id)
     return _signed({"shared_id": shared_id})
 

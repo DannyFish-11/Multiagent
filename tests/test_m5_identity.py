@@ -171,3 +171,81 @@ async def test_manual_policy_queues(tmp_path):
     policy = ManualPolicy()
     assert await policy.decide("任意内容", {"a": 1}) == "pending"
     assert policy.queue == [{"content": "任意内容", "meta": {"a": 1}}]
+
+
+# ---------------------------------------------------------------- 5.2 SDK 全链路冒烟(离线)
+
+async def test_a2a_sdk_end_to_end_smoke(tmp_path):
+    """经 a2a-sdk 1.0.3 真实 JSONRPC 栈完成一次委托:
+    well-known 卡片可取且含签名;白名单 agent 的 memory_search 委托返回可验签的
+    共享记忆;未知 agent 得到 approval_required。"""
+    import httpx
+    pytest.importorskip("a2a")
+
+    cfg = make_fake_config(tmp_path)
+    store, _, _ = build_store_with_shared(cfg)
+    ident = AgentIdentity.load_or_create(tmp_path / "id")
+    trust = TrustStore(store)
+    server = A2AServerAdapter(ident, store, trust, "http://localhost:8003")
+
+    await store.add(MultimodalInput.text("共享:白色的猫是常见宠物"), {"visibility": "shared"})
+    peer = AgentIdentity.load_or_create(tmp_path / "peer")
+    await trust.trust(peer.agent_id)
+
+    app = server.build_app()
+    transport = httpx.ASGITransport(app=app)
+
+    # Agent Card(A2A well-known 路径)
+    async with httpx.AsyncClient(transport=transport, base_url="http://a2a") as client:
+        card_resp = await client.get("/.well-known/agent-card.json")
+        assert card_resp.status_code == 200
+        card = card_resp.json()
+        assert card["name"] == "memory-agent"
+        assert card["signatures"], "well-known 卡片必须携带签名"
+
+    # 客户端适配器发起委托(白名单 peer)→ ok + 只含共享记忆 + 响应可验签
+    peer_client = A2AClientAdapter(peer)
+    envelope = await peer_client.delegate(
+        "http://a2a/", "memory_search", {"query": "白色的猫"}, transport=transport)
+    assert verify_envelope(envelope)
+    assert envelope["payload"]["status"] == "ok"
+    assert envelope["payload"]["hits"], "共享记忆应命中"
+    assert all(h["meta"].get("visibility") == "shared" for h in envelope["payload"]["hits"])
+
+    # 未知 agent → approval_required
+    stranger = AgentIdentity.load_or_create(tmp_path / "stranger")
+    stranger_client = A2AClientAdapter(stranger)
+    envelope = await stranger_client.delegate(
+        "http://a2a/", "memory_search", {"query": "白色的猫"}, transport=transport)
+    assert envelope["payload"]["status"] == "approval_required"
+
+
+def test_identity_rejects_swapped_private_key(tmp_path):
+    """identity.json 公钥与私钥不匹配(密钥被替换)必须拒绝加载。"""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    AgentIdentity.load_or_create(tmp_path / "id")
+    rogue = Ed25519PrivateKey.generate().private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    (tmp_path / "id" / "agent_ed25519.key").write_bytes(rogue)
+    with pytest.raises(Exception) as exc:
+        AgentIdentity.load_or_create(tmp_path / "id")
+    assert "不匹配" in str(exc.value)
+
+
+async def test_promote_via_api(tmp_path):
+    """/memory/promote 端点:私有记忆经 API 上交共享池。"""
+    cfg = make_fake_config(tmp_path)
+    store, _, shared = build_store_with_shared(cfg)
+    app = create_app(cfg, llm=EchoMemoryLLM(), memory=store, skip_dependency_checks=True)
+    with TestClient(app) as client:
+        add = client.post("/memory/add", json={
+            "input": {"type": "text", "content": "值得共享的客观事实"}, "meta": {}})
+        mem_id = add.json()["ids"][0]
+        resp = client.post("/memory/promote", json={"memory_id": mem_id})
+        assert resp.status_code == 200 and resp.json()["shared_id"]
+    assert await shared.count() == 1

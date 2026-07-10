@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from adapters.embedder import build_embedder
 from adapters.memory import QdrantMemoryStore
@@ -58,6 +57,10 @@ def test_payments_blanket_deny():
         assert verdict["action"] == "deny", (tool, args)
         assert "拒付" in verdict["reason"]
     assert payments_enforce({"tool_name": "memory_search", "arguments": {"query": "天气"}})["action"] == "allow"
+    # 误杀回归:payload/repayment 等含 pay 子串的普通词不得触发拒付
+    for tool, args in (("gmail_read_payload", {}), ("http_parse", {"field": "payload"}),
+                       ("loan_notes", {"text": "repayment schedule discussion"})):
+        assert payments_enforce({"tool_name": tool, "arguments": args})["action"] == "allow", (tool, args)
 
 
 def test_gmail_mcp_mount_config():

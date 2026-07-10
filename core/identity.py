@@ -97,6 +97,14 @@ class AgentIdentity:
             private_key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
             if not isinstance(private_key, Ed25519PrivateKey):
                 raise LayerError("L5", "identity", f"{key_path} 不是 Ed25519 私钥")
+            stored_pub = meta.get("public_key")
+            actual_pub = _b64(private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw))
+            if stored_pub and stored_pub != actual_pub:
+                raise LayerError(
+                    "L5", "identity",
+                    f"identity.json 公钥与私钥不匹配(私钥可能被替换):{identity_dir}",
+                )
             return cls(
                 agent_id=meta["agent_id"],
                 private_key=private_key,
@@ -181,7 +189,7 @@ def verify_signature(payload: Any, protected: str, signature: str, public_key_b6
         signing_input = protected.encode("ascii") + b"." + _b64(canonical_json(payload)).encode("ascii")
         pub.verify(_unb64(signature), signing_input)
         return True
-    except (InvalidSignature, ValueError, KeyError):
+    except (InvalidSignature, ValueError, KeyError, TypeError):
         return False
 
 

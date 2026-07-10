@@ -246,6 +246,30 @@ class ExperimentSettings(BaseModel):
     snapshot_dir: str = "./experiments/snapshots"
 
 
+class CloudSettings(BaseModel):
+    """M17 云端底座(供应商与机型由人类选定,停点)。"""
+
+    provider: Literal["generic_rest", "local", "none"] = "local"
+    base_url: str = ""
+    api_key: str = ""
+    machine_type: str = ""
+    region: str = ""
+    image_id: str = ""
+    upload_base_url: str = ""       # 对象存储数据包上传前缀
+
+
+class ConductorSettings(BaseModel):
+    """M17/M18 队列与熔断。"""
+
+    state_path: str = "./data/conductor_state.json"
+    max_concurrent_vms: int = 2
+    breaker_state_path: str = "./data/global_breaker.json"
+    global_daily_usd: float = 50.0
+    global_monthly_usd: float = 500.0
+    single_experiment_max_ratio: float = 0.5
+    pause_wait_timeout_s: float = 86400.0
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_AGENT_",
@@ -273,6 +297,8 @@ class AppConfig(BaseSettings):
     loops: LoopSettings = Field(default_factory=LoopSettings)
     vote: VoteSettings = Field(default_factory=VoteSettings)
     experiment: ExperimentSettings = Field(default_factory=ExperimentSettings)
+    cloud: CloudSettings = Field(default_factory=CloudSettings)
+    conductor: ConductorSettings = Field(default_factory=ConductorSettings)
 
     @classmethod
     def settings_customise_sources(

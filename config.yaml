@@ -77,6 +77,25 @@ services:
   api_host: 0.0.0.0
   api_port: 8002
 
+# ---------------- PHASE 5 ----------------
+
+cloud:  # M17 云端底座(供应商与机型由人类选定,停点)
+  provider: local          # generic_rest | local | none
+  base_url: ""
+  machine_type: ""
+  region: ""
+  image_id: ""
+  upload_base_url: ""      # 对象存储数据包上传前缀
+
+conductor:  # M17/M18 队列 + 双层熔断
+  state_path: ./data/conductor_state.json
+  max_concurrent_vms: 2
+  breaker_state_path: ./data/global_breaker.json
+  global_daily_usd: 50.0
+  global_monthly_usd: 500.0
+  single_experiment_max_ratio: 0.5   # 单实验不得占全局日额度 > 50%
+  pause_wait_timeout_s: 86400         # 层一暂停后等待人类 24h
+
 # ---------------- PHASE 4 ----------------
 
 loops:  # M14.1 循环硬上限(触顶记 loop_capped,非静默停)

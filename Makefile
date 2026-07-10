@@ -1,9 +1,21 @@
 # memory-agent 任务入口(BUILD_SPEC §1)
-.PHONY: install up up-gpu down run-embed run-api run-mcp test lint demo \
+.PHONY: install setup quickstart chat up up-gpu down run-embed run-api run-mcp test lint demo \
         verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 verify fixtures
 
 install:
 	uv sync --group dev
+
+# 首次运行向导:交互式生成 .env(选 LLM/嵌入/预算,密钥只落 .env)
+setup:
+	uv run python scripts/setup.py
+
+# 一键上手:检查环境 → 向导(若无 .env)→ 起 Docker 全栈 → 等健康检查通过
+quickstart:
+	./scripts/install.sh
+
+# 终端里和已在跑的 agent 对话(无需 GUI)
+chat:
+	uv run python scripts/chat.py
 
 # M20 A1:无 key demo(echo LLM + fake 嵌入 + 内存向量库),零密钥/GPU/docker
 demo:

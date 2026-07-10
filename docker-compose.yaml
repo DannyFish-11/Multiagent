@@ -22,7 +22,8 @@ services:
     build: .
     image: memory-agent:latest
     env_file:
-      - .env
+      - path: .env          # 密钥经向导写入;缺失时不报错,由应用 /healthz 分层 fail-fast
+        required: false
     environment:
       MEMORY_AGENT_VECTORDB__URL: http://qdrant:6333
       MEMORY_AGENT_BUDGET__LEDGER_PATH: /app/data/cost_ledger.json
@@ -48,7 +49,8 @@ services:
     image: memory-agent:latest
     profiles: ["mcp"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       MEMORY_AGENT_VECTORDB__URL: http://qdrant:6333
       MEMORY_AGENT_BUDGET__LEDGER_PATH: /app/data/cost_ledger.json

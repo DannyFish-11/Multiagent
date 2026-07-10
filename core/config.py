@@ -276,6 +276,8 @@ class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_AGENT_",
         env_nested_delimiter="__",
+        env_file=".env",           # 本地运行(make run-api)自动读 .env(setup 向导写入)
+        env_file_encoding="utf-8",
         extra="ignore",
     )
 
@@ -312,7 +314,8 @@ class AppConfig(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         yaml_path = Path(os.environ.get("MEMORY_AGENT_CONFIG", PROJECT_ROOT / "config.yaml"))
-        sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
+        # 优先级:init > 进程环境变量 > .env > config.yaml(密钥经 .env 注入即生效)
+        sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings, dotenv_settings]
         if yaml_path.exists():
             sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_path))
         return tuple(sources)

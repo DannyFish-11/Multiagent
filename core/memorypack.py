@@ -49,7 +49,12 @@ def _content_hash(data: bytes) -> str:
 
 # ---------------------------------------------------------------- 打包/解包
 
+def entries_bytes(entries: list[dict]) -> bytes:
+    return "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries).encode()
+
+
 def _write_pack(path: Path, manifest: dict, entries: list[dict], blobs: dict[str, bytes]) -> None:
+    jsonl = entries_bytes(entries)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         def add_bytes(name: str, data: bytes) -> None:
@@ -59,19 +64,23 @@ def _write_pack(path: Path, manifest: dict, entries: list[dict], blobs: dict[str
             tar.addfile(info, io.BytesIO(data))
 
         add_bytes("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode())
-        add_bytes("memories.jsonl",
-                  "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries).encode())
+        add_bytes("memories.jsonl", jsonl)
         for digest, data in blobs.items():
             add_bytes(f"blobs/{digest}", data)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(zstandard.ZstdCompressor(level=9).compress(buf.getvalue()))
 
 
+# 解压安全上限(防 zstd 炸弹拖垮宿主内存)
+MAX_PACK_BYTES = 1 << 30  # 1 GiB
+
+
 def read_pack(path: Path) -> tuple[dict, list[dict], dict[str, bytes]]:
-    raw = zstandard.ZstdDecompressor().decompress(path.read_bytes(), max_output_size=1 << 32)
+    raw = zstandard.ZstdDecompressor().decompress(path.read_bytes(), max_output_size=MAX_PACK_BYTES)
     manifest: dict = {}
     entries: list[dict] = []
     blobs: dict[str, bytes] = {}
+    jsonl_digest: str | None = None
     with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
         for member in tar.getmembers():
             f = tar.extractfile(member)
@@ -81,6 +90,7 @@ def read_pack(path: Path) -> tuple[dict, list[dict], dict[str, bytes]]:
             if member.name == "manifest.json":
                 manifest = json.loads(data)
             elif member.name == "memories.jsonl":
+                jsonl_digest = _content_hash(data)
                 entries = [json.loads(line) for line in data.decode().splitlines() if line.strip()]
             elif member.name.startswith("blobs/"):
                 digest = member.name.split("/", 1)[1]
@@ -89,6 +99,10 @@ def read_pack(path: Path) -> tuple[dict, list[dict], dict[str, bytes]]:
                 blobs[digest] = data
     if not manifest:
         raise LayerError("L7", "memorypack", f"{path} 缺少 manifest.json")
+    # 完整性:manifest.entries_sha256 由导出方签名覆盖,篡改 memories.jsonl 在此被拒
+    expected = manifest.get("entries_sha256")
+    if expected is not None and expected != jsonl_digest:
+        raise LayerError("L7", "memorypack", f"memories.jsonl 摘要不符(条目被篡改): {path}")
     return manifest, entries, blobs
 
 
@@ -151,6 +165,7 @@ class MemoryPackManager:
             "memory_count": len(entries),
             "modality_stats": modality_stats,
             "embedding": {"model": self._embedder_model, "dim": self._embedder_dim},
+            "entries_sha256": _content_hash(entries_bytes(entries)),
         }
         manifest["signature"] = self._identity.sign(manifest)
         _write_pack(out_path, manifest, entries, blobs)

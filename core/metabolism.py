@@ -122,6 +122,21 @@ async def run_metabolism(memory: "MemoryStore", events_path: str | Path,
     events = logger.load_events()
     usable = [e for e in events if e.adopted_ids and e.feedback != "down"]
 
+    if not usable:
+        # 零证据不给建议:样本为空时任何参数排序都是噪音
+        report: dict[str, Any] = {
+            "generated_at": time.time(),
+            "events_total": len(events), "events_usable": 0,
+            "grid_results": {}, "current_k": current_k, "recommended_k": current_k,
+            "config_diff": "# 无可用回放事件(需 adopted_ids 且反馈非 down),不给出建议",
+            "note": "样本不足;先积累带反馈的检索事件再运行代谢实验",
+        }
+        out_dir = Path(report_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"metabolism-{int(time.time())}.json"
+        out_file.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        report["report_path"] = str(out_file)
+        return report
+
     results: dict[str, float] = {}
     for k in k_grid:
         results[f"k={k}"] = await replay_hit_rate(memory, events, k)

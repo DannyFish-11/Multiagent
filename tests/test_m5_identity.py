@@ -133,6 +133,37 @@ def test_a2a_client_verifies_card_via_http(tmp_path):
         assert verify_signed_card(signed)
 
 
+async def test_a2a_client_fetch_and_verify_card_adapter(tmp_path):
+    """A2AClientAdapter.fetch_and_verify_card 全链路:HTTP 取卡 + 验签 + 篡改拒绝。"""
+    import httpx
+
+    from core.errors import LayerError
+
+    cfg = make_fake_config(tmp_path)
+    store, _, _ = build_store_with_shared(cfg)
+    app = create_app(cfg, llm=EchoMemoryLLM(), memory=store, skip_dependency_checks=True)
+    me = AgentIdentity.load_or_create(tmp_path / "me")
+    client = A2AClientAdapter(me)
+
+    with TestClient(app):  # 触发 lifespan,让 app.state 就绪
+        transport = httpx.ASGITransport(app=app)
+        signed = await client.fetch_and_verify_card("http://peer", transport=transport)
+        assert signed["card"]["skills"]
+
+        # 中间人篡改卡片 → 必须拒绝
+        class TamperTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request):
+                resp = await transport.handle_async_request(request)
+                import json as _j
+                body = _j.loads((await resp.aread()).decode())
+                body["card"]["name"] = "evil"
+                return httpx.Response(200, json=body)
+
+        with pytest.raises(LayerError) as exc:
+            await client.fetch_and_verify_card("http://peer", transport=TamperTransport())
+        assert "验签失败" in str(exc.value)
+
+
 # ---------------------------------------------------------------- 5.3 分区与上交
 
 async def test_visibility_default_private_and_shared_pool(tmp_path):

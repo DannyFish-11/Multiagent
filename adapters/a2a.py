@@ -134,6 +134,8 @@ class A2AServerAdapter:
         if skill not in SKILLS:
             return self._identity.signed_envelope(
                 {"status": "rejected", "reason": f"不支持的 skill: {skill}"})
+        if not isinstance(params, dict):
+            params = {}
 
         if skill in ("memory_search", "multimodal_recall"):
             query = str(params.get("query", ""))
@@ -190,6 +192,8 @@ class A2AServerAdapter:
                 text = context.get_user_input()
                 try:
                     req = json.loads(text)
+                    if not isinstance(req, dict):
+                        raise json.JSONDecodeError("not an object", text, 0)
                 except json.JSONDecodeError:
                     req = {"skill": "memory_search", "params": {"query": text}}
                 result = await adapter.handle_task(
@@ -224,11 +228,11 @@ class A2AClientAdapter:
     def __init__(self, identity: AgentIdentity) -> None:
         self._identity = identity
 
-    async def fetch_and_verify_card(self, base_url: str) -> dict[str, Any]:
+    async def fetch_and_verify_card(self, base_url: str, transport=None) -> dict[str, Any]:
         """经 HTTP 获取对方 signed card(自有 JSON 端点或 A2A well-known)并验签。"""
         import httpx
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, transport=transport) as client:
             resp = await client.get(f"{base_url.rstrip('/')}/identity/card")
             if resp.status_code != 200:
                 raise LayerError("L5", "a2a-client", f"获取 Agent Card 失败 HTTP {resp.status_code}")

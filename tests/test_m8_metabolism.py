@@ -128,3 +128,19 @@ async def test_m8_3_no_selfmodify_paths(tmp_path):
     for forbidden in ("def apply", "auto_apply", "config.yaml\", \"w", "yaml.dump"):
         assert forbidden not in src, f"metabolism 源码不得包含自动应用路径: {forbidden}"
     assert "人工审阅" in src  # 边界声明在场
+
+
+async def test_m8_zero_evidence_gives_no_suggestion(tmp_path):
+    """零可用事件(无 adopted/全 down)时不得给出参数建议。"""
+    cfg = make_fake_config(tmp_path)
+    store = build_store(cfg)
+    logger = RetrievalLogger(cfg.metabolism.events_path)
+    logger.log(RetrievalEvent(query="q1", hit_ids=["a"], adopted_ids=[], event_id="e1"))
+    logger.log(RetrievalEvent(query="q2", hit_ids=["b"], adopted_ids=["b"],
+                              feedback="down", event_id="e2"))
+
+    report = await run_metabolism(store, cfg.metabolism.events_path,
+                                  cfg.metabolism.report_dir, current_k=5)
+    assert report["events_usable"] == 0
+    assert report["recommended_k"] == 5  # 维持现状
+    assert "不给出建议" in report["config_diff"]

@@ -6,7 +6,7 @@ import base64
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Modality = Literal["text", "image", "audio"]
 Visibility = Literal["private", "shared"]
@@ -24,6 +24,15 @@ class MultimodalInput(BaseModel):
     type: Modality
     content: str
     mime: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_base64(self) -> "MultimodalInput":
+        if self.type != "text":
+            try:
+                base64.b64decode(self.content, validate=True)
+            except Exception as exc:
+                raise ValueError(f"{self.type} 内容必须是合法 base64: {exc}") from exc
+        return self
 
     @classmethod
     def text(cls, content: str) -> "MultimodalInput":

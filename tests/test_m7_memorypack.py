@@ -187,3 +187,34 @@ async def test_import_rejects_bad_signature(tmp_path):
     with pytest.raises(LayerError) as exc:
         await mgr.import_pack(bad_pack)
     assert "验签失败" in str(exc.value)
+
+
+async def test_import_rejects_tampered_entries(tmp_path):
+    """负向:篡改 memories.jsonl(manifest 原样)必须被摘要校验拒绝——防记忆投毒。"""
+    import io
+    import tarfile
+    import zstandard
+
+    cfg = make_fake_config(tmp_path)
+    store = build_store(cfg)
+    await seed(store)
+    mgr, _ = make_manager(store, tmp_path)
+    pack = tmp_path / "pack.tar.zst"
+    await mgr.export(pack)
+
+    raw = zstandard.ZstdDecompressor().decompress(pack.read_bytes(), max_output_size=1 << 30)
+    out = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(raw)) as src, tarfile.open(fileobj=out, mode="w") as dst:
+        for m in src.getmembers():
+            data = src.extractfile(m).read()
+            if m.name == "memories.jsonl":
+                data = data.replace("Benjamin".encode(), "EVIL_INJECT".encode())
+            info = tarfile.TarInfo(m.name)
+            info.size = len(data)
+            dst.addfile(info, io.BytesIO(data))
+    evil = tmp_path / "evil.tar.zst"
+    evil.write_bytes(zstandard.ZstdCompressor().compress(out.getvalue()))
+
+    with pytest.raises(LayerError) as exc:
+        read_pack(evil)
+    assert "篡改" in str(exc.value)

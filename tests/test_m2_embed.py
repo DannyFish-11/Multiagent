@@ -139,3 +139,10 @@ def test_gateway_chat_proxy_reports_l0_when_llm_down(embed_client):
     assert resp.status_code == 502
     body = resp.json()
     assert body["layer"] == "L0"
+
+
+def test_invalid_base64_rejected_as_422(embed_client):
+    """image/audio 的非法 base64 在入参校验层被拒(422),不产生 500。"""
+    resp = embed_client.post("/embed", json={"inputs": [
+        {"type": "image", "content": "!!!not-base64!!!"}]})
+    assert resp.status_code == 422

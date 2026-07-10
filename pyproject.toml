@@ -33,6 +33,19 @@ local-embed = [
 a2a = [
     "a2a-sdk~=1.0.3",
 ]
+# M21 drop-in 插件依赖(仅用到对应插件时装):
+# LiteLLM —— 一个 OpenAI 格式调 100+ 家 LLM(llm.mode=litellm)
+litellm = [
+    "litellm>=1.44",
+]
+# Ray —— 大规模并发云供应商(cloud.provider=ray)
+ray = [
+    "ray>=2.9",
+]
+# Inspect-AI —— 把评测/benchmark 接成实验任务源(task_source: inspect)
+inspect = [
+    "inspect-ai>=0.3",
+]
 # Extra deps required by the Omni-SimpleMem backend (upstream package).
 simplemem = [
     "openai>=1.0",

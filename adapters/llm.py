@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 
 from core.errors import LayerError
+from core.plugins import get_plugin, register
 from core.schemas import Message
 
 logger = logging.getLogger(__name__)
@@ -254,25 +255,49 @@ def _plain_text(content: Any) -> str:
     return str(content)
 
 
-def build_llm_client(config, role: str = "chat", ledger=None):
-    """按 config 装配 LLM 客户端(adapter 层工厂,core/services 只调用不选型)。
+# ---------------------------------------------------------------- 插件登记(M21)
+# 内置 LLM 后端按名字注册到插件表;build_llm_client 只按 config.llm.mode 取名解析,
+# 第三方 LLM(entry point "llm:xxx" 或 @register("llm","xxx"))掉进来即可用。
 
-    mode=local → VLLMOpenAIAdapter(PHASE 1 路径,一键切回)
-    mode=api   → OpenAICompatAdapter(chat / memory 双角色可分开配置)
-    mode=echo  → EchoLLM(M20 A1 离线 demo 档,零 key 验证记忆闭环)
-    """
-    if config.llm.mode == "echo":
-        return EchoLLM()
-    if config.llm.mode == "api":
-        role_cfg = config.llm.memory if role == "memory" else config.llm.chat
-        # memory 角色未配置时回落到 chat 角色(允许同一端点)
-        if role == "memory" and not role_cfg.base_url:
-            role_cfg = config.llm.chat
-        return OpenAICompatAdapter(role_cfg, ledger=ledger)
+@register("llm", "echo")
+def _llm_echo(config, role, ledger):
+    return EchoLLM()
+
+
+@register("llm", "api")
+def _llm_api(config, role, ledger):
+    role_cfg = config.llm.memory if role == "memory" else config.llm.chat
+    # memory 角色未配置时回落到 chat 角色(允许同一端点)
+    if role == "memory" and not role_cfg.base_url:
+        role_cfg = config.llm.chat
+    return OpenAICompatAdapter(role_cfg, ledger=ledger)
+
+
+@register("llm", "local")
+def _llm_local(config, role, ledger):
     return VLLMOpenAIAdapter(
         base_url=config.llm.base_url, model=config.llm.model,
         api_key=config.llm.api_key, timeout_s=config.llm.timeout_s,
     )
+
+
+@register("llm", "litellm")
+def _llm_litellm(config, role, ledger):
+    # 名字常驻注册;LiteLLMAdapter 及其 litellm 依赖仅在真正用到时 lazy import
+    from adapters.llm_litellm import LiteLLMAdapter
+
+    role_cfg = config.llm.memory if role == "memory" else config.llm.chat
+    if role == "memory" and not role_cfg.model:
+        role_cfg = config.llm.chat
+    return LiteLLMAdapter(role_cfg, ledger=ledger)
+
+
+def build_llm_client(config, role: str = "chat", ledger=None):
+    """按 config.llm.mode 从插件表取 LLM 后端(local/api/echo/litellm/第三方…)。
+
+    core/services 只调用不选型;新增后端只需注册一个名字,此处零改动。
+    """
+    return get_plugin("llm", config.llm.mode)(config, role, ledger)
 
 
 def build_ledger(config):

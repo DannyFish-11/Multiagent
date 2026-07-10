@@ -14,6 +14,7 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 
 from core.errors import LayerError
+from core.plugins import get_plugin, register
 
 
 @runtime_checkable
@@ -112,3 +113,35 @@ class LocalProcessProvider:
     def mark(self, vm_id: str, status: str) -> None:  # 测试钩子
         if vm_id in self._procs:
             self._procs[vm_id]["status"] = status
+
+
+# ---------------------------------------------------------------- 供应商插件(M21)
+
+@register("cloud_provider", "local")
+def _prov_local(config):
+    return LocalProcessProvider()
+
+
+@register("cloud_provider", "generic_rest")
+def _prov_generic(config):
+    c = config.cloud
+    return GenericRestProvider(c.base_url, c.api_key, c.machine_type, c.region, c.image_id)
+
+
+@register("cloud_provider", "ray")
+def _prov_ray(config):
+    # 名字常驻;RayProvider 及 ray 依赖仅在真正用到时 lazy import(--extra ray)
+    from adapters.cloud_ray import RayProvider
+
+    return RayProvider(config)
+
+
+def build_provider(config):
+    """按 config.cloud.provider 从插件表取云供应商(local/generic_rest/ray/第三方)。
+
+    conductor 只依赖 CloudProvider 协议;换云 = 换个名字(重供应商如 Ray 走可选 extra)。
+    """
+    if config.cloud.provider == "none":
+        raise LayerError("L17", "cloud",
+                         "cloud.provider=none(停点:供应商由人类选定并配置)")
+    return get_plugin("cloud_provider", config.cloud.provider)(config)

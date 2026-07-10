@@ -48,7 +48,9 @@ class LLMSettings(BaseModel):
     # mode=api  :走外部 OpenAI 兼容 API(PHASE2.5 M-A,chat/memory 双角色)
     # mode=echo :离线 demo 档(M20 A1),零 key 回显"检索到的记忆+问题",
     #            仅验证记忆存取闭环,不产生真实推理(配 embedder=fake + vectordb=memory)
-    mode: Literal["local", "api", "echo"] = "local"
+    # mode=litellm:经 LiteLLM 调 100+ 家(M21;需 --extra litellm;model 用 provider/model 写法)
+    # 值为插件名(内置 local/api/echo/litellm;第三方插件名亦可,由注册表校验)
+    mode: str = "local"
     base_url: str = "http://localhost:8000/v1"
     model: str = "gemma-4"
     model_by_tier: dict[str, str] = Field(default_factory=dict)
@@ -68,7 +70,8 @@ class BudgetSettings(BaseModel):
 
 
 class EmbedderSettings(BaseModel):
-    backend: Literal["local", "remote", "jina_api", "fake"] = "local"
+    # 插件名(内置 local/remote/jina_api/fake;第三方插件名亦可,由注册表校验)
+    backend: str = "local"
     model_name: str = "jinaai/jina-embeddings-v5-omni-small"
     model_by_tier: dict[str, str] = Field(default_factory=dict)
     dim: int = 1024
@@ -109,7 +112,8 @@ class PromotionSettings(BaseModel):
 
 
 class MemorySettings(BaseModel):
-    backend: Literal["qdrant", "simplemem"] = "qdrant"
+    # 插件名(内置 qdrant/simplemem;第三方插件名亦可,由注册表校验)
+    backend: str = "qdrant"
     extraction: Literal["llm", "verbatim"] = "llm"
     consolidation: ConsolidationSettings = Field(default_factory=ConsolidationSettings)
     simplemem: SimpleMemSettings = Field(default_factory=SimpleMemSettings)
@@ -251,8 +255,9 @@ class ExperimentSettings(BaseModel):
 class CloudSettings(BaseModel):
     """M17 云端底座(供应商与机型由人类选定,停点)。"""
 
-    provider: Literal["generic_rest", "local", "none"] = "local"
-    base_url: str = ""
+    # 插件名(内置 local/generic_rest/ray/none;第三方插件名亦可,由注册表校验)
+    provider: str = "local"
+    base_url: str = ""             # generic_rest:API 前缀;ray:集群地址(留空=本机多核)
     api_key: str = ""
     machine_type: str = ""
     region: str = ""

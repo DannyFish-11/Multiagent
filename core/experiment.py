@@ -25,6 +25,8 @@ from typing import Any, Awaitable, Callable
 
 import yaml
 
+from core.plugins import get_plugin, register
+
 
 # ---------------------------------------------------------------- 任务源
 
@@ -94,13 +96,27 @@ def _redact(text: str) -> str:
     return text
 
 
+register("task_source", "synthetic")(
+    lambda spec, seed: SyntheticTaskSource(spec["path"], seed, spec.get("limit")))
+register("task_source", "replay")(
+    lambda spec, seed: ReplayTaskSource(spec["path"], seed, spec.get("redact", True),
+                                        spec.get("limit")))
+
+
+@register("task_source", "inspect")
+def _ts_inspect(spec, seed):
+    # 名字常驻;InspectTaskSource 及 inspect_ai 仅在真正用到时 lazy import
+    from adapters.task_source_inspect import InspectTaskSource
+
+    return InspectTaskSource(spec, seed)
+
+
 def make_task_source(spec: dict, seed: int) -> Any:
-    kind = spec.get("type", "synthetic")
-    if kind == "synthetic":
-        return SyntheticTaskSource(spec["path"], seed, spec.get("limit"))
-    if kind == "replay":
-        return ReplayTaskSource(spec["path"], seed, spec.get("redact", True), spec.get("limit"))
-    raise ValueError(f"未知任务源类型: {kind}")
+    """按 spec['type'] 从插件表取任务源(synthetic/replay/inspect/第三方)。
+
+    第三方基准/数据集(GitHub 上的 benchmark)做成一个 task_source 插件掉进来即可跑。
+    """
+    return get_plugin("task_source", spec.get("type", "synthetic"))(spec, seed)
 
 
 # ---------------------------------------------------------------- 预算暂停

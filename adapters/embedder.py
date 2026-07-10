@@ -18,6 +18,7 @@ import httpx
 
 from core.config import EmbedderSettings
 from core.errors import LayerError
+from core.plugins import get_plugin, register
 from core.schemas import MultimodalInput
 
 
@@ -288,14 +289,13 @@ class JinaAPIAdapter:
         return vectors
 
 
+# ---------------------------------------------------------------- 插件登记(M21)
+register("embedder", "local")(lambda s, ledger=None: JinaV5OmniAdapter(s))
+register("embedder", "remote")(lambda s, ledger=None: RemoteEmbedderAdapter(s.base_url, s.effective_dim))
+register("embedder", "jina_api")(lambda s, ledger=None: JinaAPIAdapter(s, ledger=ledger))
+register("embedder", "fake")(lambda s, ledger=None: FakeDeterministicEmbedder(s.effective_dim))
+
+
 def build_embedder(settings: EmbedderSettings, ledger=None) -> Embedder:
-    """按 config 显式选择后端;不存在任何自动回退路径。"""
-    if settings.backend == "local":
-        return JinaV5OmniAdapter(settings)
-    if settings.backend == "remote":
-        return RemoteEmbedderAdapter(settings.base_url, settings.effective_dim)
-    if settings.backend == "jina_api":
-        return JinaAPIAdapter(settings, ledger=ledger)
-    if settings.backend == "fake":
-        return FakeDeterministicEmbedder(settings.effective_dim)
-    raise LayerError("L1", "embedder", f"未知 backend: {settings.backend}")
+    """按 settings.backend 从插件表取嵌入后端(不存在任何自动回退;缺名即报错列出可用)。"""
+    return get_plugin("embedder", settings.backend)(settings, ledger=ledger)

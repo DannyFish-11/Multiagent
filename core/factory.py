@@ -8,7 +8,7 @@ from adapters.memory import MemoryStore, QdrantMemoryStore, SimpleMemAdapter
 from adapters.vectordb import QdrantAdapter
 from core.agent import MemoryAgent
 from core.config import AppConfig, load_config
-from core.errors import LayerError
+from core.plugins import get_plugin, register
 
 _singletons: dict[str, object] = {}
 
@@ -35,20 +35,34 @@ def build_llm(config: AppConfig, role: str = "chat") -> LLMClient:
     return ConcurrencyLimitedLLM(inner, config.concurrency.max_concurrent_llm_calls)
 
 
+# ---------------------------------------------------------------- 记忆后端插件(M21)
+
+@register("memory", "simplemem")
+def _mem_simplemem(config, embedder=None, llm=None):
+    return SimpleMemAdapter(config)
+
+
+@register("memory", "qdrant")
+def _mem_qdrant(config, embedder=None, llm=None):
+    db = QdrantAdapter(config.vectordb, dim=config.embedder.effective_dim)
+    shared_db = QdrantAdapter(
+        config.vectordb, dim=config.embedder.effective_dim,
+        collection=config.memory.shared_collection, share_client_from=db,
+    )
+    return QdrantMemoryStore(embedder, llm, db, config, shared_db=shared_db)
+
+
 def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
                        llm: LLMClient | None = None) -> MemoryStore:
-    if config.memory.backend == "simplemem":
-        return SimpleMemAdapter(config)
-    if config.memory.backend == "qdrant":
+    """按 config.memory.backend 从插件表取记忆后端(qdrant/simplemem/第三方)。
+
+    qdrant 需要嵌入器 + 记忆抽取 LLM(未显式传入则在此按 config 装配)。
+    """
+    backend = config.memory.backend
+    if backend == "qdrant":
         embedder = embedder or build_embedder(config.embedder, ledger=get_ledger(config))
         llm = llm or build_llm(config, role="memory")
-        db = QdrantAdapter(config.vectordb, dim=config.embedder.effective_dim)
-        shared_db = QdrantAdapter(
-            config.vectordb, dim=config.embedder.effective_dim,
-            collection=config.memory.shared_collection, share_client_from=db,
-        )
-        return QdrantMemoryStore(embedder, llm, db, config, shared_db=shared_db)
-    raise LayerError("L2", "factory", f"未知 memory.backend: {config.memory.backend}")
+    return get_plugin("memory", backend)(config, embedder, llm)
 
 
 def get_shared_memory_store(config: AppConfig | None = None) -> MemoryStore:

@@ -79,10 +79,16 @@ def create_app(
         app.state.audit = AuditLog(cfg.approval.audit_path)
         app.state.approvals = ApprovalQueue(
             cfg.approval, app.state.audit, Notifier(cfg.approval))
-        # 装配 agent(需 function-calling 模型):autonomy=swarm → 去中心化多成员(M24);
-        # autonomy=tools → 会用工具的单 agent(M22);否则/不满足 → 回落记忆问答(向后兼容)。
+        # 装配 agent(需 function-calling 模型):autonomy=supervisor → 中心调度委派(M25);
+        # swarm → 去中心化多成员(M24);tools → 会用工具的单 agent(M22);否则 → 回落记忆问答。
         _fc = hasattr(_llm, "chat_tools")
-        if cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
+        if cfg.agent.autonomy == "supervisor" and _fc and cfg.supervisor.workers:
+            from adapters.web import WebAdapter
+            from core.supervisor import build_supervisor
+
+            app.state.agent = build_supervisor(
+                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals)
+        elif cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
             from adapters.web import WebAdapter
             from core.swarm import build_swarm
 

@@ -106,6 +106,22 @@ def handoff_tool(target: str) -> Tool:
         run, action=f"handoff:{target}", safe=True, handoff_to=target)
 
 
+def delegate_tool(worker_name: str, run_worker) -> Tool:
+    """委派工具(M25 supervisor):协调者调用它把子任务交给 worker 执行并**取回结果**。
+    与 swarm 的 handoff 不同——控制权不转移,worker 只把结果返给协调者汇总。safe=True
+    (委派本身经审计;若对 delegate:<worker> 配 deny 策略则真正拦住,因为运行 worker 就是
+    审批闸的 execute 回调;worker 内部工具再各自过审批闸)。"""
+    async def run(args: dict) -> str:
+        return await run_worker(args.get("task", ""))
+    return Tool(
+        f"delegate_to_{worker_name}",
+        f"把一个子任务交给「{worker_name}」处理并拿回它的结果(你负责汇总)。",
+        {"type": "object", "properties": {
+            "task": {"type": "string", "description": f"交给 {worker_name} 的具体子任务"}},
+         "required": ["task"]},
+        run, action=f"delegate:{worker_name}", safe=True)
+
+
 _BUILTINS = {"recall": recall_tool, "remember": remember_tool,
              "web_search": web_search_tool, "web_fetch": web_fetch_tool}
 

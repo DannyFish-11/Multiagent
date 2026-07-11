@@ -2,6 +2,20 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.6.0 — 中心调度 Supervisor(M25:协调者委派 worker 汇总)
+
+- **`agent.autonomy=supervisor`**:中央协调者拆解任务、委派 worker、汇总结果(与 M24 swarm
+  的去中心化手递手互补——控制权始终在协调者,worker 只返回结果不接管)。落地即**组合、零新
+  循环**:每个 worker 是一个带独立人设的 `ToolAgent`(默认不自动写回子任务);"委派"是一个 `Tool`
+  (`delegate_to_<worker>`);协调者本身也是 `ToolAgent`,其工具正是这些委派工具。审批闸 /
+  循环硬上限 / CostLedger / 注入防御全部自动复用;深度恒为 2(协调者→worker),无无限递归。
+- 委派对 `delegate:<worker>` 可配审批分级——**deny 真正拦住 worker 运行**(运行 worker 就是
+  审批闸的 execute 回调,与 swarm 转交的治理修复同理)。`build_supervisor` 装配期校验(空/
+  重名 worker),`doctor` 同款预检。需 function-calling 模型;缺 worker 安全回落 MemoryAgent。
+- `ToolAgent` 加 `persona`(覆盖系统提示,worker 各有人设)+ `write_back`(worker 不写回记忆)
+  两个可选参数(向后兼容);`Tool` 新增 `delegate_tool` 工厂。docs/PLUGINS.md 加 supervisor 段
+  + swarm/supervisor 选型指引。
+
 ## 0.5.0 — 去中心化 Swarm(M24:成员手递手传任务)
 
 - **`agent.autonomy=swarm`**:去中心化多成员 agent——named 成员之间**自主转交**任务,无中央

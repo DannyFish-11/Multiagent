@@ -131,6 +131,30 @@ swarm:
 
 ---
 
+## Supervisor(M25)—— 中心调度,委派 worker 汇总结果
+
+`agent.autonomy=supervisor`:一个**中央协调者**把子任务委派给 worker、取回结果汇总,
+控制权始终在协调者(与 swarm 的去中心化手递手互补)。落地即"组合"——**每个 worker 就是
+一个 ToolAgent**(自己的人设 + 私有工具,不写回记忆),**委派就是一个 Tool**,而**协调者
+本身也是一个 ToolAgent**,其工具正是这些 `delegate_to_<worker>`。因此审批闸 / 循环上限 /
+成本账 / 注入防御全部自动复用;深度恒为 2(协调者→worker),无无限递归。
+
+```yaml
+agent: {autonomy: supervisor}
+supervisor:
+  prompt: "你是协调者。拆解任务、委派给合适的 worker,汇总结果给最终答复。"   # 空=内置默认
+  workers:
+    - {name: researcher, prompt: "你负责检索资料与事实核查。", tools: [recall, web_search]}
+    - {name: writer,     prompt: "你负责把要点整理成清晰的中文答复。", tools: []}
+```
+委派对 `delegate:<worker>` 动作可配审批分级(deny 会真正拦住该 worker 运行,因为运行
+worker 正是审批闸的 execute 回调);`doctor` 预检 worker 配置(空/重名/模型能力)。
+
+**swarm vs supervisor 怎么选**:流程可变、成员对等自主协商 → swarm;有明确"总指挥"拆活
+派活收活 → supervisor。二者都需 function-calling 模型,缺配置均安全回落记忆问答。
+
+---
+
 ## 树外插件(pip 装个包就被发现,不改本仓库)
 
 在你的第三方包 `pyproject.toml` 里声明 entry point group `memory_agent.plugins`:

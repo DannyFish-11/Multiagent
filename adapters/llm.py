@@ -202,6 +202,41 @@ class OpenAICompatAdapter:
             return content
         raise LayerError("L0", "openai-compat", "没有可用端点")
 
+    async def chat_tools(self, messages: list[dict], tools: list[dict], **kw: Any):
+        """function-calling 一步:messages 为 OpenAI 格式 dict(含 tool/assistant.tool_calls),
+        tools 为 function 规格。返回 AssistantTurn(content 或 tool_calls)。M22 工具循环用。"""
+        import json
+
+        from core.tools import AssistantTurn, ToolCall
+
+        if self._ledger is not None:
+            self._ledger.check_budget()
+        idx = self._active
+        ep = self._endpoints[idx]
+        payload: dict[str, Any] = {"model": ep["model"], "messages": messages}
+        if tools:
+            payload["tools"] = tools
+        payload.update(kw)
+        data = await self._post_with_retry(idx, payload)
+        try:
+            msg = data["choices"][0]["message"]
+        except (KeyError, IndexError) as exc:
+            raise LayerError("L0", "openai-compat", f"响应结构异常: {data}") from exc
+        usage = data.get("usage") or {}
+        if self._ledger is not None and usage:
+            self._ledger.record(ep["base_url"], ep["model"],
+                                int(usage.get("prompt_tokens", 0)),
+                                int(usage.get("completion_tokens", 0)))
+        calls = []
+        for tc in (msg.get("tool_calls") or []):
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=args))
+        return AssistantTurn(content=msg.get("content"), tool_calls=calls)
+
     async def health(self) -> bool:
         try:
             resp = await self._client(self._active).get("/models")

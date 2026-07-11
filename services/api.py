@@ -67,22 +67,34 @@ def create_app(
         app.state.ledger = _ledger
         app.state.llm = _llm
         app.state.memory = _memory
-        app.state.agent = MemoryAgent(_llm, _memory, cfg)
         # M5 身份(终身不变;记忆库随 agent_id 绑定)
         app.state.identity = AgentIdentity.load_or_create(cfg.identity.dir)
         app.state.signed_card = build_signed_card(app.state.identity, cfg.a2a.base_url)
         # M8 埋点
         app.state.retrieval_logger = RetrievalLogger(cfg.metabolism.events_path)
-        app.state.agent.set_retrieval_logger(app.state.retrieval_logger)
-        # M9 审批中枢(无 Omnigent 形态的危险动作守门人)
+        # M9 审批中枢(无 Omnigent 形态的危险动作守门人;工具循环的每次工具调用经此闸)
         from core.approval import ApprovalQueue, Notifier
         from core.audit import AuditLog
 
         app.state.audit = AuditLog(cfg.approval.audit_path)
         app.state.approvals = ApprovalQueue(
             cfg.approval, app.state.audit, Notifier(cfg.approval))
-        logger.info("L3 api ready: memory.backend=%s agent_id=%s",
-                    cfg.memory.backend, app.state.identity.agent_id)
+        # M22 装配 agent:autonomy=tools 且 LLM 支持 function-calling → ToolAgent(会用工具),
+        # 否则回落记忆增强问答 MemoryAgent(向后兼容)
+        if cfg.agent.autonomy == "tools" and hasattr(_llm, "chat_tools"):
+            from adapters.web import WebAdapter
+            from core.tool_agent import ToolAgent
+            from core.tools import build_toolbox
+
+            app.state.agent = ToolAgent(
+                _llm, _memory, cfg, approval=app.state.approvals,
+                tools=build_toolbox(cfg, _memory, WebAdapter(cfg.web)))
+        else:
+            app.state.agent = MemoryAgent(_llm, _memory, cfg)
+        if hasattr(app.state.agent, "set_retrieval_logger"):
+            app.state.agent.set_retrieval_logger(app.state.retrieval_logger)
+        logger.info("L3 api ready: memory.backend=%s autonomy=%s agent_id=%s",
+                    cfg.memory.backend, cfg.agent.autonomy, app.state.identity.agent_id)
         yield
         await app.state.agent.drain()
 

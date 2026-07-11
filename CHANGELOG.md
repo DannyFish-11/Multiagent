@@ -2,6 +2,16 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.3.0 — 自主工具循环(M22)
+
+- `agent.autonomy=tools`:会用工具的 agent 循环——LLM 自己决定调用工具(内置 `recall`/
+  `remember`/`web_search`/`web_fetch` + 第三方 `tool` 插件),检索→决策→经审批闸执行→回灌→
+  迭代,受循环硬上限约束(`loop_capped` 不静默)。默认 `chat`(记忆增强问答),向后兼容。
+- 治理复用:每次工具调用经 `ApprovalQueue.gate`(auto/confirm/deny + 审计);安全工具
+  (recall/remember)自动直放,危险工具按 config 分级。
+- LLM 适配器加 `chat_tools`(OpenAI-compat / LiteLLM 的 function-calling);`ToolAgent` 是
+  `MemoryAgent` 的 drop-in(services 按 autonomy 装配)。`doctor` 校验 tools 模式的模型能力。
+
 ## 0.2.0 — 易用性 / 可观测性 / 模块化(M20–M21)
 
 ### 易用性(M20 A + turnkey)

@@ -88,6 +88,15 @@ def run_doctor(config) -> list[Check]:
                                 f"须在 {config.llm.base_url} 起 vLLM(GPU)",
                                 "无 GPU 就用 api/litellm/echo"))
 
+    # ---- 自主工具循环(M22) ----
+    if config.agent.autonomy == "tools":
+        if mode in ("api", "litellm"):
+            checks.append(Check("ok", f"autonomy=tools(工具:{config.agent.tools})"))
+        else:
+            checks.append(Check("warn", f"autonomy=tools 但 LLM={mode} 不支持 function-calling",
+                                "echo/local 无工具调用能力,将回落记忆问答",
+                                "用 llm.mode=api 或 litellm"))
+
     # ---- 嵌入 ----
     backend = config.embedder.backend
     if backend not in reg.available("embedder"):

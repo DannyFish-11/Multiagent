@@ -80,6 +80,44 @@ class LiteLLMAdapter:
                           "usage": {"prompt_tokens": pt, "completion_tokens": ct}}
         return content
 
+    async def chat_tools(self, messages: list[dict], tools: list[dict], **kw: Any):
+        """function-calling 一步(M22 工具循环用)。返回 AssistantTurn。"""
+        import json
+
+        from core.tools import AssistantTurn, ToolCall
+
+        if self._ledger is not None:
+            self._ledger.check_budget()
+        try:
+            import litellm
+        except ImportError as exc:
+            raise LayerError("L0", "litellm",
+                             "缺 litellm 依赖:uv sync --extra litellm") from exc
+        try:
+            resp = await litellm.acompletion(
+                model=self._model, messages=messages, tools=tools or None,
+                api_key=self._api_key, api_base=self._api_base, timeout=self._timeout, **kw)
+        except Exception as exc:
+            raise LayerError("L0", "litellm", f"调用失败({self._model}): {exc}") from exc
+        choices = _get(resp, "choices", None)
+        if not choices:
+            raise LayerError("L0", "litellm", f"响应无 choices: {resp!r}"[:300])
+        msg = _get(choices[0], "message", None)
+        usage = _get(resp, "usage", None)
+        pt, ct = int(_get(usage, "prompt_tokens", 0)), int(_get(usage, "completion_tokens", 0))
+        if self._ledger is not None and (pt or ct):
+            self._ledger.record(self._api_base or "litellm", self._model, pt, ct)
+        calls = []
+        for tc in (_get(msg, "tool_calls", None) or []):
+            fn = _get(tc, "function", {})
+            try:
+                args = json.loads(_get(fn, "arguments", "{}") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            calls.append(ToolCall(id=_get(tc, "id", ""), name=_get(fn, "name", ""),
+                                  arguments=args))
+        return AssistantTurn(content=_get(msg, "content", None), tool_calls=calls)
+
     async def health(self) -> bool:
         # litellm 无统一 health 探针;真正的可达性在首次 chat 时以 L0 错误暴露(不静默)
         return True

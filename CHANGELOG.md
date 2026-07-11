@@ -2,6 +2,16 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.8.0 — 开箱即用(M27:CLI 流式 + 场景模板)
+
+- **`memory-agent chat` CLI 改走流式**(`/chat/stream`),逐 token 打印;工具/多 agent 档整段
+  一次性(同一 SSE 通道)。至此流式覆盖 HTTP / 浏览器 UI / 终端三个界面。
+- **现成场景模板**(`examples/`,用 `MEMORY_AGENT_CONFIG` 指向即用,只覆盖差异键):
+  `swarm-customer-service.yaml`(客服分流 swarm:接单→技术/财务→总结)、
+  `supervisor-research-write.yaml`(研究+写作 supervisor:协调者委派 researcher/writer)。
+  附 `examples/README.md` 用法。测试校验随附模板加载合法、能装配、doctor 结构项通过——
+  绝不发坏模板。
+
 ## 0.7.0 — 流式输出(M26:SSE /chat/stream)
 
 - **`POST /chat/stream`(text/event-stream)**:逐 token 流式对话。事件 `data: {type: meta|

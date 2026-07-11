@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -47,19 +48,35 @@ def main() -> int:
         if msg == "/mem":
             print("上一轮命中记忆:", [m.get("content") for m in last_mem] or "(无)")
             continue
+        # M26/M27:走流式端点,逐 token 打印(chat 档真流式;工具/多 agent 档整段一次性)
         try:
-            resp = httpx.post(f"{BASE}/chat", json={"message": msg, "session_id": session},
-                              timeout=180)
-            if resp.status_code != 200:
-                print(f"⚠️  HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
-                continue
-            body = resp.json()
+            print("助手 > ", end="", flush=True)
+            got_token = False
+            with httpx.stream("POST", f"{BASE}/chat/stream",
+                              json={"message": msg, "session_id": session}, timeout=180) as resp:
+                if resp.status_code != 200:
+                    print(f"\n⚠️  HTTP {resp.status_code}", file=sys.stderr)
+                    continue
+                for line in resp.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        ev = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    kind = ev.get("type")
+                    if kind == "token":
+                        print(ev.get("text", ""), end="", flush=True)
+                        got_token = True
+                    elif kind == "meta":
+                        last_mem = ev.get("memories_used", [])
+                    elif kind == "error":
+                        print(f"\n⚠️  {ev.get('message')}", file=sys.stderr)
+            print()  # 收尾换行
         except Exception as exc:
-            print(f"⚠️  请求失败:{exc}", file=sys.stderr)
+            print(f"\n⚠️  请求失败:{exc}", file=sys.stderr)
             continue
-        last_mem = body.get("memories_used", [])
-        print(f"助手 > {body.get('reply', '')}")
-        if last_mem:
+        if got_token and last_mem:
             print(f"       (用到 {len(last_mem)} 条记忆,/mem 查看)")
 
 

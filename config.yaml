@@ -77,6 +77,16 @@ services:
   api_host: 0.0.0.0
   api_port: 8002
 
+# ---------------- M20 B:可观测性 ----------------
+
+observability:  # Langfuse via OpenTelemetry;默认关 → 零依赖零开销(埋点在 adapters/observability.py)
+  enabled: false                 # true 需 uv sync --extra observability;缺依赖 fail-fast
+  otlp_endpoint: http://localhost:3000/api/public/otel/v1/traces
+  public_key: ""                 # Langfuse project pk-lf-...(经 .env 注入)
+  secret_key: ""                 # Langfuse project sk-lf-...(经 .env 注入,勿入库)
+  service_name: memory-agent
+  io_summary_max_chars: 512      # span 上 prompt/正文摘要的截断长度
+
 # ---------------- PHASE 5 ----------------
 
 cloud:  # M17 云端底座(供应商与机型由人类选定,停点)

@@ -332,8 +332,12 @@ def build_llm_client(config, role: str = "chat", ledger=None):
     """按 config.llm.mode 从插件表取 LLM 后端(local/api/echo/litellm/第三方…)。
 
     core/services 只调用不选型;新增后端只需注册一个名字,此处零改动。
+    M20 B:返回前经 instrument_llm 包裹(observability.enabled=false 时原样返回)。
     """
-    return get_plugin("llm", config.llm.mode)(config, role, ledger)
+    from adapters.observability import instrument_llm
+
+    client = get_plugin("llm", config.llm.mode)(config, role, ledger)
+    return instrument_llm(client, config)
 
 
 def build_ledger(config):

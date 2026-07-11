@@ -282,6 +282,25 @@ class ConductorSettings(BaseModel):
     pause_wait_timeout_s: float = 86400.0
 
 
+class ObservabilitySettings(BaseModel):
+    """M20 B:可观测性(Langfuse via OpenTelemetry)。默认关 → 零依赖零开销。
+
+    enabled=false 时:不导入任何 OTel/Langfuse 依赖、不装配 exporter、adapter 埋点
+    直通(instrument_* 原样返回),保持"克隆即测试全绿"。
+    enabled=true 时:adapter 层出入口发 OTLP span 到 Langfuse(model/token/耗时/
+    检索命中/工具调用 + session/experiment/agent 维度标签)。密钥经 env 注入。
+    """
+
+    enabled: bool = False
+    # Langfuse OTLP 接收端点(自托管:http://localhost:3000/api/public/otel/v1/traces)
+    otlp_endpoint: str = "http://localhost:3000/api/public/otel/v1/traces"
+    public_key: str = ""            # Langfuse project public key(pk-...)
+    secret_key: str = ""            # Langfuse project secret key(sk-...);仅经 .env 注入
+    service_name: str = "memory-agent"
+    # 输入/输出摘要在 span 上的最大字符数(避免把长 prompt/正文整段外发)
+    io_summary_max_chars: int = 512
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_AGENT_",
@@ -313,6 +332,7 @@ class AppConfig(BaseSettings):
     experiment: ExperimentSettings = Field(default_factory=ExperimentSettings)
     cloud: CloudSettings = Field(default_factory=CloudSettings)
     conductor: ConductorSettings = Field(default_factory=ConductorSettings)
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     @classmethod
     def settings_customise_sources(

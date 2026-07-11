@@ -57,12 +57,18 @@ def build_memory_store(config: AppConfig, embedder: Embedder | None = None,
     """按 config.memory.backend 从插件表取记忆后端(qdrant/simplemem/第三方)。
 
     qdrant 需要嵌入器 + 记忆抽取 LLM(未显式传入则在此按 config 装配)。
+    M20 B:检索/写入步骤埋点(observability.enabled=false 时 instrument_* 原样返回);
+    埋点逻辑全在 adapters.observability,此处仅调用,不改签名、不引入依赖。
     """
+    from adapters.observability import instrument_embedder, instrument_memory
+
     backend = config.memory.backend
     if backend == "qdrant":
         embedder = embedder or build_embedder(config.embedder, ledger=get_ledger(config))
+        embedder = instrument_embedder(embedder, config)
         llm = llm or build_llm(config, role="memory")
-    return get_plugin("memory", backend)(config, embedder, llm)
+    store = get_plugin("memory", backend)(config, embedder, llm)
+    return instrument_memory(store, config)
 
 
 def get_shared_memory_store(config: AppConfig | None = None) -> MemoryStore:

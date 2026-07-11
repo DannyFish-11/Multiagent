@@ -1,5 +1,6 @@
 # memory-agent 任务入口(BUILD_SPEC §1)
 .PHONY: install setup quickstart chat plugins doctor up up-gpu down run-embed run-api run-mcp test lint demo \
+        observability-up observability-down \
         verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 verify fixtures
 
 install:
@@ -36,6 +37,14 @@ demo:
 # M20 A3:静态检查(与 test 一并进 CI)
 lint:
 	uv run ruff check core adapters services scripts
+
+# M20 B:Langfuse 自托管可观测性栈(独立启停,目标机器需开放出网拉镜像)
+# --env-file 让 compose 插值从 .env.observability 读取密钥(区别于主 .env)
+observability-up:
+	docker compose --env-file .env.observability -f docker-compose.observability.yaml up -d
+
+observability-down:
+	docker compose --env-file .env.observability -f docker-compose.observability.yaml down
 
 up:
 	docker compose up -d qdrant

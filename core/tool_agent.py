@@ -81,10 +81,14 @@ class ToolAgent:
             logger.info("工具 %s 未完成:%s", call.name, exc)
             return f"[工具 {call.name} 未执行:{exc}]"
 
-    async def run(self, message: str, session_id: str = "default") -> ChatResponse:
+    async def _stream(self, message: str, session_id: str):
+        """工具循环的**唯一**实现(生成器):yield 事件 meta/step/token/done。
+        run() 与 chat_stream() 都消费它——不重复循环逻辑。step 事件让 SSE 客户端看到
+        逐步进度(哪个工具/委派在跑),而非只等最终一坨。"""
         hits = await self._memory.search(MultimodalInput.text(message),
                                          k=self._config.agent.top_k)
         event_id = uuid.uuid4().hex
+        yield {"type": "meta", "event_id": event_id, "_hits": hits}
         messages: list[dict] = [
             {"role": "system", "content": self._system_prompt(hits)},
             {"role": "user", "content": message},
@@ -98,8 +102,9 @@ class ToolAgent:
             turn = await self._llm.chat_tools(messages, specs, **sampling)
             if not turn.tool_calls:                    # 最终回答
                 await self._write(message, session_id)
-                return ChatResponse(reply=turn.content or "", session_id=session_id,
-                                    memories_used=hits, event_id=event_id)
+                yield {"type": "token", "text": turn.content or ""}
+                yield {"type": "done", "event_id": event_id}
+                return
             calls = turn.tool_calls[:self._max_tools]   # 单轮批量硬上限(防一次塞爆)
             messages.append({
                 "role": "assistant", "content": turn.content or "",
@@ -108,10 +113,13 @@ class ToolAgent:
                     "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
                     for c in calls]})
             for c in calls:
+                kind = "delegate" if c.name.startswith("delegate_to_") else "tool"
+                yield {"type": "step", "kind": kind, "name": c.name, "status": "start"}
                 result = self._clip(await self._exec_tool(c, session_id))
                 used_tools.append(c.name)
                 messages.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
                                  "content": result})
+                yield {"type": "step", "kind": kind, "name": c.name, "status": "done"}
 
         # 触顶:强制一轮无工具的收尾回答(loop_capped,不静默)
         messages.append({"role": "system",
@@ -119,8 +127,27 @@ class ToolAgent:
         turn = await self._llm.chat_tools(messages, [], **sampling)
         await self._write(message, session_id)
         reply = (turn.content or "") + f"\n\n(注:达到工具步数上限 loop_capped;已用工具 {used_tools})"
-        return ChatResponse(reply=reply, session_id=session_id, memories_used=hits,
-                            event_id=event_id)
+        yield {"type": "token", "text": reply}
+        yield {"type": "done", "event_id": event_id}
+
+    async def run(self, message: str, session_id: str = "default") -> ChatResponse:
+        reply, hits, event_id = "", [], ""
+        async for ev in self._stream(message, session_id):
+            if ev["type"] == "meta":
+                hits, event_id = ev["_hits"], ev["event_id"]
+            elif ev["type"] == "token":
+                reply += ev["text"]
+        return ChatResponse(reply=reply, session_id=session_id,
+                            memories_used=hits, event_id=event_id)
+
+    async def chat_stream(self, message: str, session_id: str = "default", image=None):
+        """流式(M28):逐步 yield 进度事件。meta 里的记忆句柄转成可序列化 memories_used。"""
+        async for ev in self._stream(message, session_id):
+            if ev["type"] == "meta":
+                yield {"type": "meta", "event_id": ev["event_id"],
+                       "memories_used": [h.model_dump() for h in ev["_hits"]]}
+            else:
+                yield ev
 
     async def _write(self, message: str, session_id: str) -> None:
         if not self._write_back:               # worker 不把子任务写入长期记忆

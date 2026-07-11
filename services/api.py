@@ -106,6 +106,10 @@ def create_app(
             app.state.agent = MemoryAgent(_llm, _memory, cfg)
         if hasattr(app.state.agent, "set_retrieval_logger"):
             app.state.agent.set_retrieval_logger(app.state.retrieval_logger)
+        # M29:可观测性开启时把 agent 编排层也包成发 span 的 TracedAgent(关闭原样返回,零开销);
+        # 内部 LLM/嵌入/记忆调用已各自埋点,自动挂到 agent span 下形成执行树。
+        from adapters.observability import instrument_agent
+        app.state.agent = instrument_agent(app.state.agent, cfg)
         logger.info("L3 api ready: memory.backend=%s autonomy=%s agent_id=%s",
                     cfg.memory.backend, cfg.agent.autonomy, app.state.identity.agent_id)
         yield

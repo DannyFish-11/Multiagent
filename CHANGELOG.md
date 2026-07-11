@@ -2,6 +2,30 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.10.0 — 编排层可观测性(M29:agent 执行树进 Langfuse)
+
+- **`TracedAgent`**:把 agent 编排层也接入 M20 的 OTel/Langfuse。此前只追踪 LLM/嵌入/记忆
+  调用;现在 `run`/`chat`/`chat_stream` 各开一个 agent span,内部那些调用(已各自埋点)自动
+  挂到它下面形成**完整执行树**。chat_stream 把 M28 的 step 事件(工具/转交/委派)记为 span
+  **event**(带时间戳的编排时间线;避开 OTel 在异步生成器里跨 yield 传播 current-span 的
+  脆弱性)。span 带 agent.type / session / prompt·completion 摘要 / step_count。
+- 装配同款红线:`instrument_agent` 在 services 组装处包裹;`observability.enabled=false` 原样
+  返回(零依赖零开销),enabled=true 且缺 extra 则 fail-fast。core 零改动。
+- 验证:FakeTracer 单测(不依赖 OTel)+ 真实 OpenTelemetry 端到端(InMemorySpanExporter
+  确认 span 名/属性/step 事件)。
+
+## 0.9.0 — 流式进度事件(M28:工具/多 agent 的实时步骤)
+
+- **`step` 进度事件**:此前只有 chat 档真流式,工具/swarm/supervisor 档只在结束吐一坨。现在
+  `/chat/stream` 在这些档也逐步吐 `data: {type:"step", kind:"tool"|"handoff"|"delegate",
+  name, status:"start"|"done", …}`——客户端能实时看到"在调用 recall""intake→tech""委派
+  writer",而非干等。浏览器 UI 与 `memory-agent chat` CLI 都渲染这些步骤。
+- **实现即重构、无重复循环**:`ToolAgent`/`SwarmAgent` 的循环抽成唯一的 `_stream` 生成器,
+  `run()`(返回 ChatResponse)与 `chat_stream()`(吐 SSE 事件)都消费它——单一真相源。
+  supervisor(本身是 ToolAgent)委派显示 `delegate` 步骤;worker 内部步骤不外泄(隔离)。
+- 对抗式审计确认重构**行为等价**:run() 结果、记忆写入次数/时机(含 write_back)、loop_capped
+  收尾、转录合法性、handoff 仅在真正切换时发事件——全部与重构前逐行一致。
+
 ## 0.8.0 — 开箱即用(M27:CLI 流式 + 场景模板)
 
 - **`memory-agent chat` CLI 改走流式**(`/chat/stream`),逐 token 打印;工具/多 agent 档整段

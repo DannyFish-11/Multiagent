@@ -215,7 +215,70 @@ class TracedMemory(_TracedBase):
             return ids
 
 
+class TracedAgent(_TracedBase):
+    """M29:给 agent 编排层发 span。run/chat 各开一个 agent span——内部的 LLM/嵌入/记忆
+    调用(已被 TracedLLM/TracedMemory 埋点)自动挂到它下面,形成执行树。chat_stream 额外
+    把 M28 的 step 事件(工具/转交/委派)记为 span **event**(带时间戳的点,Langfuse 展示
+    编排时间线;避开 OTel 在异步生成器里跨 yield 传播 current-span 的脆弱性)。"""
+
+    def _tag_agent(self, span, session_id: str) -> None:
+        _apply_tags(span, self._cfg)
+        span.set_attribute("agent.type", type(self._inner).__name__)
+        if session_id:
+            span.set_attribute("langfuse.session.id", session_id)
+            span.set_attribute("session.id", session_id)
+
+    async def run(self, message, session_id: str = "default"):
+        with self._tracer.start_as_current_span("agent.run") as span:
+            self._tag_agent(span, session_id)
+            span.set_attribute("gen_ai.prompt.summary", _summary(message, self._cfg))
+            resp = await self._inner.run(message, session_id=session_id)
+            span.set_attribute("gen_ai.completion.summary",
+                               _summary(getattr(resp, "reply", ""), self._cfg))
+            return resp
+
+    async def chat(self, message, session_id: str = "default", image=None,
+                   sync_memory_write: bool = True):
+        with self._tracer.start_as_current_span("agent.chat") as span:
+            self._tag_agent(span, session_id)
+            span.set_attribute("gen_ai.prompt.summary", _summary(message, self._cfg))
+            resp = await self._inner.chat(message, session_id=session_id, image=image,
+                                          sync_memory_write=sync_memory_write)
+            span.set_attribute("gen_ai.completion.summary",
+                               _summary(getattr(resp, "reply", ""), self._cfg))
+            return resp
+
+    async def chat_stream(self, message, session_id: str = "default", image=None):
+        with self._tracer.start_as_current_span("agent.stream") as span:
+            self._tag_agent(span, session_id)
+            span.set_attribute("gen_ai.prompt.summary", _summary(message, self._cfg))
+            steps, reply_len = 0, 0
+            async for ev in self._inner.chat_stream(message, session_id, image=image):
+                t = ev.get("type")
+                if t == "step":
+                    steps += 1
+                    span.add_event("step", {  # 编排时间线的一个点
+                        "kind": str(ev.get("kind", "")), "name": str(ev.get("name", "")),
+                        "status": str(ev.get("status", ""))})
+                elif t == "token":
+                    reply_len += len(ev.get("text", ""))
+                elif t == "error":
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.message", str(ev.get("message", ""))[:512])
+                yield ev
+            span.set_attribute("agent.step_count", steps)
+            span.set_attribute("gen_ai.completion.length", reply_len)
+
+
 # ------------------------------------------------------------------ 装配入口
+
+def instrument_agent(obj, cfg):
+    """enabled=false → 原样返回(零开销);enabled=true → 包裹为发 span 的 TracedAgent。"""
+    if not cfg.observability.enabled:
+        return obj
+    tracer = init_tracing(cfg)
+    return TracedAgent(obj, tracer, cfg) if tracer is not None else obj
+
 
 def instrument_llm(obj, cfg):
     """enabled=false → 原样返回(零开销);enabled=true → 包裹为发 span 的 TracedLLM。"""

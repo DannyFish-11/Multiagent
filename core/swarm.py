@@ -103,10 +103,13 @@ class SwarmAgent:
             logger.info("成员 %s 工具 %s 未完成:%s", member.name, call.name, exc)
             return f"[工具 {call.name} 未执行:{exc}]"
 
-    async def run(self, message: str, session_id: str = "default") -> ChatResponse:
+    async def _stream(self, message: str, session_id: str):
+        """swarm 循环的唯一实现(生成器):yield meta/step/token/done。run() 与 chat_stream()
+        都消费它。step 事件让客户端看到成员流转(handoff)与工具调用的实时进度。"""
         hits = await self._memory.search(MultimodalInput.text(message),
                                          k=self._config.agent.top_k)
         event_id = uuid.uuid4().hex
+        yield {"type": "meta", "event_id": event_id, "_hits": hits}
         # 无常驻 system:每轮按当前 active 成员现算 system,拼在共享转录之前
         messages: list[dict] = [{"role": "user", "content": message}]
         active = self._entry
@@ -124,8 +127,9 @@ class SwarmAgent:
                                               specs, **sampling)
             if not turn.tool_calls:                    # 最终回答 → 结束
                 await self._write(message, session_id)
-                return ChatResponse(reply=turn.content or "", session_id=session_id,
-                                    memories_used=hits, event_id=event_id)
+                yield {"type": "token", "text": turn.content or ""}
+                yield {"type": "done", "event_id": event_id}
+                return
             calls = turn.tool_calls[:self._max_tools]
             messages.append({
                 "role": "assistant", "content": turn.content or "",
@@ -156,10 +160,16 @@ class SwarmAgent:
                     messages.append({"role": "tool", "tool_call_id": c.id,
                                      "name": c.name, "content": result})
                 else:
+                    yield {"type": "step", "kind": "tool", "name": c.name,
+                           "status": "start", "member": member.name}
                     result = self._clip(await self._exec_tool(member, c, session_id))
                     messages.append({"role": "tool", "tool_call_id": c.id,
                                      "name": c.name, "content": result})
+                    yield {"type": "step", "kind": "tool", "name": c.name,
+                           "status": "done", "member": member.name}
             if next_active is not None:                # 本轮切换一次 active(取首个有效转交)
+                yield {"type": "step", "kind": "handoff", "name": next_active,
+                       "status": "done", "detail": f"{active} → {next_active}"}
                 active = next_active
                 handoffs += 1
                 path.append(active)
@@ -173,8 +183,26 @@ class SwarmAgent:
                                           [], **sampling)
         await self._write(message, session_id)
         reply = (turn.content or "") + f"\n\n(注:达到步数上限 loop_capped;流转路径 {' → '.join(path)})"
-        return ChatResponse(reply=reply, session_id=session_id, memories_used=hits,
-                            event_id=event_id)
+        yield {"type": "token", "text": reply}
+        yield {"type": "done", "event_id": event_id}
+
+    async def run(self, message: str, session_id: str = "default") -> ChatResponse:
+        reply, hits, event_id = "", [], ""
+        async for ev in self._stream(message, session_id):
+            if ev["type"] == "meta":
+                hits, event_id = ev["_hits"], ev["event_id"]
+            elif ev["type"] == "token":
+                reply += ev["text"]
+        return ChatResponse(reply=reply, session_id=session_id,
+                            memories_used=hits, event_id=event_id)
+
+    async def chat_stream(self, message: str, session_id: str = "default", image=None):
+        async for ev in self._stream(message, session_id):
+            if ev["type"] == "meta":
+                yield {"type": "meta", "event_id": ev["event_id"],
+                       "memories_used": [h.model_dump() for h in ev["_hits"]]}
+            else:
+                yield ev
 
     async def _write(self, message: str, session_id: str) -> None:
         try:

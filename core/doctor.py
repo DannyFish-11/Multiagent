@@ -86,6 +86,26 @@ def _check_swarm(config, mode: str) -> list[Check]:
     return out
 
 
+def _check_supervisor(config, mode: str) -> list[Check]:
+    """supervisor worker 配置预检:非空 / 名字唯一 / 需 function-calling 模型。"""
+    out: list[Check] = []
+    workers = config.supervisor.workers
+    if not workers:
+        out.append(Check("fail", "autonomy=supervisor 但 supervisor.workers 为空",
+                         "无 worker 可委派,将回落记忆问答",
+                         "配 supervisor.workers(见 docs/PLUGINS.md)或改 autonomy"))
+        return out
+    if mode not in ("api", "litellm"):
+        out.append(Check("warn", f"autonomy=supervisor 但 LLM={mode} 不支持 function-calling",
+                         "echo/local 无工具调用能力,将回落记忆问答", "用 llm.mode=api 或 litellm"))
+    names = [w.name for w in workers]
+    if len(names) != len(set(names)):
+        out.append(Check("fail", f"supervisor worker 名重复:{names}", "", "worker name 须唯一"))
+    if not [c for c in out if c.level == "fail"]:
+        out.append(Check("ok", f"autonomy=supervisor({len(workers)} worker)", " · ".join(names)))
+    return out
+
+
 def run_doctor(config) -> list[Check]:
     checks: list[Check] = []
     reg = _load_registry()
@@ -137,6 +157,10 @@ def run_doctor(config) -> list[Check]:
     # ---- 去中心化 swarm(M24) ----
     if config.agent.autonomy == "swarm":
         checks.extend(_check_swarm(config, mode))
+
+    # ---- 中心调度 supervisor(M25) ----
+    if config.agent.autonomy == "supervisor":
+        checks.extend(_check_supervisor(config, mode))
 
     # ---- Harness Profile(M23:按模型脚手架) ----
     from core.errors import LayerError

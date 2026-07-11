@@ -2,6 +2,41 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.8.0 — 开箱即用(M27:CLI 流式 + 场景模板)
+
+- **`memory-agent chat` CLI 改走流式**(`/chat/stream`),逐 token 打印;工具/多 agent 档整段
+  一次性(同一 SSE 通道)。至此流式覆盖 HTTP / 浏览器 UI / 终端三个界面。
+- **现成场景模板**(`examples/`,用 `MEMORY_AGENT_CONFIG` 指向即用,只覆盖差异键):
+  `swarm-customer-service.yaml`(客服分流 swarm:接单→技术/财务→总结)、
+  `supervisor-research-write.yaml`(研究+写作 supervisor:协调者委派 researcher/writer)。
+  附 `examples/README.md` 用法。测试校验随附模板加载合法、能装配、doctor 结构项通过——
+  绝不发坏模板。
+
+## 0.7.0 — 流式输出(M26:SSE /chat/stream)
+
+- **`POST /chat/stream`(text/event-stream)**:逐 token 流式对话。事件 `data: {type: meta|
+  token|done|error}`——先 `meta`(event_id + 命中记忆),再逐块 `token`,最后 `done`;流内
+  出错发 `error` 事件而非静默断流。
+- **真流式**在 chat 档(MemoryAgent):`OpenAICompatAdapter.chat_stream`(OpenAI 兼容
+  `stream=true` + `stream_options.include_usage`,SSE 解析增量,usage 在流末进 CostLedger;
+  流已开始不做端点 failover)。`MemoryAgent.chat_stream` 产出事件、流末同步写记忆;LLM 不支持
+  流式则回落整段一次性。tools/swarm/supervisor 档经端点整段一次性给出(仍走同一 SSE 通道)。
+- 浏览器聊天 UI 改走 `/chat/stream`,逐 token 增量渲染(仍 textContent 防 XSS)。
+
+## 0.6.0 — 中心调度 Supervisor(M25:协调者委派 worker 汇总)
+
+- **`agent.autonomy=supervisor`**:中央协调者拆解任务、委派 worker、汇总结果(与 M24 swarm
+  的去中心化手递手互补——控制权始终在协调者,worker 只返回结果不接管)。落地即**组合、零新
+  循环**:每个 worker 是一个带独立人设的 `ToolAgent`(默认不自动写回子任务);"委派"是一个 `Tool`
+  (`delegate_to_<worker>`);协调者本身也是 `ToolAgent`,其工具正是这些委派工具。审批闸 /
+  循环硬上限 / CostLedger / 注入防御全部自动复用;深度恒为 2(协调者→worker),无无限递归。
+- 委派对 `delegate:<worker>` 可配审批分级——**deny 真正拦住 worker 运行**(运行 worker 就是
+  审批闸的 execute 回调,与 swarm 转交的治理修复同理)。`build_supervisor` 装配期校验(空/
+  重名 worker),`doctor` 同款预检。需 function-calling 模型;缺 worker 安全回落 MemoryAgent。
+- `ToolAgent` 加 `persona`(覆盖系统提示,worker 各有人设)+ `write_back`(worker 不写回记忆)
+  两个可选参数(向后兼容);`Tool` 新增 `delegate_tool` 工厂。docs/PLUGINS.md 加 supervisor 段
+  + swarm/supervisor 选型指引。
+
 ## 0.5.0 — 去中心化 Swarm(M24:成员手递手传任务)
 
 - **`agent.autonomy=swarm`**:去中心化多成员 agent——named 成员之间**自主转交**任务,无中央

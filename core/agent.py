@@ -115,6 +115,44 @@ class MemoryAgent:
         return ChatResponse(reply=reply, session_id=session_id, memories_used=hits,
                             event_id=event_id)
 
+    async def chat_stream(self, message: str, session_id: str = "default",
+                          image: MultimodalInput | None = None):
+        """流式对话(M26):异步生成事件 dict —— 先 meta(event_id + 命中记忆),再逐块
+        token,最后 done。LLM 支持 chat_stream 则真流式,否则回落整段一次性给出。记忆在
+        流末同步写入(与 sync_memory_write 一致)。"""
+        query = MultimodalInput.text(message)
+        hits = await self._memory.search(query, k=self._config.agent.top_k)
+        event_id = uuid.uuid4().hex
+        if self._retrieval_logger is not None:
+            from core.metabolism import RetrievalEvent
+
+            self._retrieval_logger.log(RetrievalEvent(
+                query=message, hit_ids=[h.id for h in hits], event_id=event_id))
+        yield {"type": "meta", "event_id": event_id,
+               "memories_used": [h.model_dump() for h in hits]}
+
+        user_content: str | list[dict] = message
+        if image is not None:
+            user_content = [
+                {"type": "text", "text": message},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{image.mime or 'image/png'};base64,{image.content}"}},
+            ]
+        msgs = [Message(role="system", content=self._build_system_prompt(hits)),
+                Message(role="user", content=user_content)]
+
+        if hasattr(self._llm, "chat_stream"):
+            async for piece in self._llm.chat_stream(msgs):
+                yield {"type": "token", "text": piece}
+        else:                                          # 不支持流式 → 整段一次性
+            yield {"type": "token", "text": await self._llm.chat(msgs)}
+
+        try:
+            await self._write_memories(message, session_id, image)
+        except Exception:
+            self.last_write_error = True
+        yield {"type": "done", "event_id": event_id}
+
     async def drain(self) -> None:
         """等待所有后台记忆写入完成(优雅停机/测试用)。"""
         if self._pending:

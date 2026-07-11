@@ -1,0 +1,29 @@
+# 场景模板:客服分流 swarm(M24 去中心化,手递手)。接单 → 技术/财务专员 → 总结。
+#
+# 用法(先在 .env 里配好 API 供应商的 base_url/model/key):
+#   MEMORY_AGENT_CONFIG=examples/swarm-customer-service.yaml uv run memory-agent doctor
+#   MEMORY_AGENT_CONFIG=examples/swarm-customer-service.yaml uv run memory-agent run
+# 只覆盖与默认不同的键;其余沿用 config.yaml 默认。需 function-calling 模型(mode=api/litellm)。
+
+llm:
+  mode: api
+  chat: {base_url: "", model: ""}     # 停点:base_url/model/key 由 .env 注入
+embedder: {backend: fake}             # 示例用 fake 嵌入(零依赖);真用换 jina_api / local
+vectordb: {mode: memory}
+
+agent: {autonomy: swarm}
+swarm:
+  entry: intake
+  members:
+    - name: intake
+      prompt: "你是客服接单员。先判断问题类型:账号登录/系统报错等技术问题转 tech;发票/报销/扣费等财务问题转 finance。禁止直接回答,必须转交对应专员。"
+      handoffs: [tech, finance]
+    - name: tech
+      prompt: "你是技术专员,解决账号登录、系统故障类问题。排查清楚后转 summary 生成友好回复。"
+      tools: [recall, remember]
+      handoffs: [summary]
+    - name: finance
+      prompt: "你是财务专员,处理发票、报销、扣费相关咨询。处理完成后转 summary 整理答复。"
+      handoffs: [summary]
+    - name: summary
+      prompt: "你是总结专员,整合前面所有成员的处理内容,输出简洁友好、面向用户的完整答复。流程到此结束,不要再转交。"

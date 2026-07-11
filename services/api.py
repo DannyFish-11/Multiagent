@@ -79,10 +79,16 @@ def create_app(
         app.state.audit = AuditLog(cfg.approval.audit_path)
         app.state.approvals = ApprovalQueue(
             cfg.approval, app.state.audit, Notifier(cfg.approval))
-        # 装配 agent(需 function-calling 模型):autonomy=swarm → 去中心化多成员(M24);
-        # autonomy=tools → 会用工具的单 agent(M22);否则/不满足 → 回落记忆问答(向后兼容)。
+        # 装配 agent(需 function-calling 模型):autonomy=supervisor → 中心调度委派(M25);
+        # swarm → 去中心化多成员(M24);tools → 会用工具的单 agent(M22);否则 → 回落记忆问答。
         _fc = hasattr(_llm, "chat_tools")
-        if cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
+        if cfg.agent.autonomy == "supervisor" and _fc and cfg.supervisor.workers:
+            from adapters.web import WebAdapter
+            from core.supervisor import build_supervisor
+
+            app.state.agent = build_supervisor(
+                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals)
+        elif cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
             from adapters.web import WebAdapter
             from core.swarm import build_swarm
 
@@ -174,6 +180,43 @@ def create_app(
         return await app.state.agent.chat(
             req.message, session_id=req.session_id, image=image, sync_memory_write=True,
         )
+
+    @app.post("/chat/stream")
+    async def chat_stream(req: ChatRequest):
+        """流式对话(M26,SSE text/event-stream):事件 data: {type: meta|token|done|error}。
+        chat 档(MemoryAgent)真逐 token;tools/swarm/supervisor 档整段一次性给出(仍可用)。"""
+        import json as _json
+
+        from fastapi.responses import StreamingResponse
+
+        image = None
+        if req.image_base64:
+            image = MultimodalInput(type="image", content=req.image_base64, mime=req.image_mime)
+        agent = app.state.agent
+
+        async def _events():
+            def _sse(ev: dict) -> str:
+                return f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+            try:
+                if hasattr(agent, "chat_stream"):
+                    async for ev in agent.chat_stream(req.message, session_id=req.session_id,
+                                                      image=image):
+                        yield _sse(ev)
+                else:                                  # 工具/多 agent 档:整段一次性
+                    resp = await agent.chat(req.message, session_id=req.session_id,
+                                            image=image, sync_memory_write=True)
+                    yield _sse({"type": "meta", "event_id": resp.event_id,
+                                "memories_used": [h.model_dump() for h in resp.memories_used]})
+                    yield _sse({"type": "token", "text": resp.reply})
+                    yield _sse({"type": "done", "event_id": resp.event_id})
+            except Exception as exc:                   # 流内出错:发 error 事件而非静默断流
+                logger.exception("chat_stream 失败")
+                yield _sse({"type": "error", "message": str(exc)})
+
+        # 反缓冲头:否则 nginx 等反代默认 proxy_buffering on 会把整条流缓成一坨,
+        # 直到 done 才吐,令逐 token 失效。X-Accel-Buffering=no 显式关 nginx 缓冲。
+        return StreamingResponse(_events(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
     @app.post("/memory/add", response_model=MemoryAddResponse)
     async def memory_add(req: MemoryAddRequest):

@@ -109,12 +109,27 @@ CHAT_HTML = """<!doctype html>
     add('user', msg);
     const thinking = add('bot', '…');
     try {
-      const r = await fetch('./chat', { method:'POST', headers:{'content-type':'application/json'},
+      // M26 流式:逐 token 增量渲染(SSE);tools/多 agent 档整段一次性也走同一通道
+      const r = await fetch('./chat/stream', { method:'POST', headers:{'content-type':'application/json'},
         body: JSON.stringify({ message: msg, session_id: session }) });
-      if(!r.ok){ thinking.textContent = '⚠️ 出错 HTTP ' + r.status; busy=false; return; }
-      const j = await r.json();
-      thinking.textContent = j.reply || '(空回复)';
-      memNote(thinking, j.memories_used);
+      if(!r.ok || !r.body){ thinking.textContent = '⚠️ 出错 HTTP ' + r.status; busy=false; return; }
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf='', text='', mems=null, started=false, idx;
+      while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        buf += dec.decode(value, {stream:true});
+        while((idx = buf.indexOf('\n\n')) >= 0){
+          const line = buf.slice(0, idx).trim(); buf = buf.slice(idx+2);
+          if(!line.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch(_){ continue; }
+          if(ev.type==='token'){ if(!started){ text=''; started=true; } text += ev.text; thinking.textContent = text; }
+          else if(ev.type==='meta'){ mems = ev.memories_used; }
+          else if(ev.type==='error'){ thinking.textContent = '⚠️ ' + ev.message; }
+        }
+      }
+      if(!started) thinking.textContent = thinking.textContent==='…' ? '(空回复)' : thinking.textContent;
+      memNote(thinking, mems);
     } catch(e){ thinking.textContent = '⚠️ 请求失败:' + e; }
     busy = false; box.focus();
   }

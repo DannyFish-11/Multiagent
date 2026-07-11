@@ -1,0 +1,23 @@
+# 场景模板:研究+写作 supervisor(M25 中心调度)。协调者委派 researcher/writer 并汇总。
+#
+# 用法(先在 .env 里配好 API 供应商的 base_url/model/key):
+#   MEMORY_AGENT_CONFIG=examples/supervisor-research-write.yaml uv run memory-agent doctor
+#   MEMORY_AGENT_CONFIG=examples/supervisor-research-write.yaml uv run memory-agent run
+# 只覆盖与默认不同的键。需 function-calling 模型(mode=api/litellm)。
+
+llm:
+  mode: api
+  chat: {base_url: "", model: ""}     # 停点:base_url/model/key 由 .env 注入
+embedder: {backend: fake}             # 示例用 fake 嵌入;真用换 jina_api / local
+vectordb: {mode: memory}
+
+agent: {autonomy: supervisor}
+supervisor:
+  prompt: "你是协调者。把用户任务拆解成子任务,用 delegate_to_* 委派给合适的 worker,收齐结果后整合成面向用户的最终答复。拿到足够信息就作答,不要无谓地反复委派。"
+  workers:
+    - name: researcher
+      prompt: "你负责检索资料与事实核查,只给经核实的要点,并标注不确定处。"
+      tools: [recall, web_search]     # web_search 需 web.search_provider + key,否则自动跳过
+    - name: writer
+      prompt: "你负责把要点整理成清晰、有条理的中文答复,不臆造未提供的信息。"
+      tools: []

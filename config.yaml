@@ -200,6 +200,14 @@ swarm:  # M24 去中心化多成员(autonomy=swarm 时生效;蜂群式手递手,
   #      handoffs: [summary]}
   #   - {name: summary, prompt: "你是总结专员,整合前面内容给出面向用户的最终答复,流程到此结束。"}
 
+supervisor:  # M25 中心调度多 agent(autonomy=supervisor 时生效;与 swarm 互补)
+  # 协调者拆解任务→委派 worker→汇总结果,控制权始终在协调者。默认空 → 未配则安全回落。
+  # 委派步数上限用 loops.agent_steps;worker 自身循环上限同款(均回落 default_max_iterations)。
+  prompt: ""       # 协调者人设(空=内置默认)
+  workers: []      # 例(取消注释即用,需 llm.mode=api/litellm):
+  #   - {name: researcher, prompt: "你负责检索资料与事实核查。", tools: [recall, web_search]}
+  #   - {name: writer,     prompt: "你负责把要点整理成清晰的中文答复。", tools: []}
+
 budget:  # PHASE2.5 M-A 成本护栏(adapter 层,不依赖 Omnigent 在场)
   daily_usd: 5.0
   ledger_path: ./data/cost_ledger.json

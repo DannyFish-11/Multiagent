@@ -41,6 +41,9 @@ class LLMRoleSettings(LLMEndpoint):
     max_retries: int = 3          # 单端点指数退避重试上限
     retry_backoff_s: float = 0.5  # 退避基数(测试可置 0)
     timeout_s: float = 120.0
+    # M26 流式:是否请求 stream_options.include_usage(供成本记账)。默认关——部分兼容
+    # 网关不认此字段会 400 打断整条流;仅在确认供应商支持时开启。
+    stream_usage: bool = False
 
 
 class LLMSettings(BaseModel):
@@ -135,8 +138,9 @@ class AgentSettings(BaseModel):
     # M22:tools = 自主工具循环(默认开;需 function-calling 模型 api/litellm,否则自动
     # 回落记忆问答);chat = 纯记忆增强问答。默认工具集只含安全的 recall/remember
     # (自动放行);危险工具(上网/付款等)需显式加入 tools 且按 config 审批分级。
-    # M22 tools;M24 swarm = 去中心化多成员手递手(需配 swarm.members;非 fc 模型回落)
-    autonomy: str = "tools"      # chat | tools | swarm
+    # M22 tools;M24 swarm = 去中心化多成员手递手;M25 supervisor = 中心调度委派 worker
+    # (swarm 需 swarm.members、supervisor 需 supervisor.workers;非 fc 模型均安全回落)
+    autonomy: str = "tools"      # chat | tools | swarm | supervisor
     tools: list[str] = Field(default_factory=lambda: ["recall", "remember"])
     # M23 Harness Profile:按模型打包的脚手架(系统提示/采样/工具循环参数),让开源模型
     # 发挥真实水平。auto = 按 chat 模型名自动选内置 profile(匹配不到回落 default,零侵入);
@@ -157,6 +161,20 @@ class SwarmSettings(BaseModel):
     默认空 → autonomy=swarm 未配成员时安全回落。"""
     entry: str = ""                                    # 起始 active 成员名
     members: list[SwarmMemberSettings] = Field(default_factory=list)
+
+
+class SupervisorWorkerSettings(BaseModel):
+    """supervisor 的一个 worker = 名字 + 人设 prompt + 私有工具。"""
+    name: str
+    prompt: str = ""
+    tools: list[str] = Field(default_factory=list)
+
+
+class SupervisorSettings(BaseModel):
+    """M25 中心调度多 agent:协调者拆解任务、委派给 worker、汇总结果(与 swarm 互补)。
+    控制权始终在协调者;worker 只返回结果不接管。默认空 → autonomy=supervisor 未配时回落。"""
+    prompt: str = ""                                   # 协调者人设(空=用内置默认)
+    workers: list[SupervisorWorkerSettings] = Field(default_factory=list)
 
 
 class IdentitySettings(BaseModel):
@@ -338,6 +356,7 @@ class AppConfig(BaseSettings):
     services: ServiceSettings = Field(default_factory=ServiceSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     swarm: SwarmSettings = Field(default_factory=SwarmSettings)
+    supervisor: SupervisorSettings = Field(default_factory=SupervisorSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     a2a: A2ASettings = Field(default_factory=A2ASettings)

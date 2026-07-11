@@ -4,9 +4,10 @@
 
 ## 0.3.0 — 自主工具循环(M22)
 
-- `agent.autonomy=tools`:会用工具的 agent 循环——LLM 自己决定调用工具(内置 `recall`/
-  `remember`/`web_search`/`web_fetch` + 第三方 `tool` 插件),检索→决策→经审批闸执行→回灌→
-  迭代,受循环硬上限约束(`loop_capped` 不静默)。默认 `chat`(记忆增强问答),向后兼容。
+- `agent.autonomy=tools`(**默认开**):会用工具的 agent 循环——LLM 自己决定调用工具(内置
+  `recall`/`remember`/`web_search`/`web_fetch` + 第三方 `tool` 插件),检索→决策→经审批闸执行→
+  回灌→迭代,受循环硬上限约束(`loop_capped` 不静默)。非 function-calling 模型(echo/local)
+  自动回落记忆问答;想纯问答设 `autonomy=chat`。默认工具集仅安全的 recall/remember。
 - 治理复用:每次工具调用经 `ApprovalQueue.gate`(auto/confirm/deny + 审计);安全工具
   (recall/remember)自动直放,危险工具按 config 分级。
 - LLM 适配器加 `chat_tools`(OpenAI-compat / LiteLLM 的 function-calling);`ToolAgent` 是

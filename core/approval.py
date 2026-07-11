@@ -91,8 +91,14 @@ class ApprovalQueue:
                    source: str = "user", agent_id: str = "", session_id: str = "",
                    level_override: str | None = None) -> Any:
         """按级别放行/入队/拒绝一次危险动作。返回 execute() 结果(auto/approved)。"""
-        level, reason = (level_override, "调用方指定级别") if level_override else \
-            self.classify(action, params)
+        if level_override:
+            # 调用方给的 override(如安全工具的 auto)不得盖过**显式 deny 策略**:
+            # 仍走一次分级,命中 deny 则 deny 优先(防工具自升级绕过治理)。
+            classified, creason = self.classify(action, params)
+            level, reason = (("deny", creason) if classified == "deny"
+                             else (level_override, "调用方指定级别"))
+        else:
+            level, reason = self.classify(action, params)
 
         async def _audit(decision: str, result: Any = None, cost: float = 0.0) -> None:
             await self._audit.record(

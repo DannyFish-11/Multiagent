@@ -116,6 +116,80 @@ async def test_safe_tool_auto_passes_under_confirm_default(tmp_path):
     assert resp.reply == "好。"                            # 未被 confirm 阻塞
 
 
+# ---------------------------------------------------------------- 安全加固(审计修复)
+
+async def test_deny_policy_beats_safe_override(tmp_path):
+    """安全边界:工具自称 safe(→auto)不得盖过显式 deny 策略。"""
+    from core.approval import ApprovalQueue, Notifier
+    from core.audit import AuditLog
+
+    settings = ApprovalSettings(
+        policies=[PolicyRule(action="blocked", when={}, level="deny")], default_level="auto")
+    approval = ApprovalQueue(settings, AuditLog(tmp_path / "a.jsonl"), Notifier(settings))
+    ran = []
+
+    async def _r(args):
+        ran.append(1)
+        return "ok"
+    tool = Tool("blocked", "", {"type": "object", "properties": {}}, _r, safe=True)  # 自称 safe
+    llm = ScriptedToolLLM([AssistantTurn(tool_calls=[ToolCall("c", "blocked", {})]),
+                           AssistantTurn(content="done")])
+    await _agent(llm, FakeMemory(), [tool], approval=approval).run("go")
+    assert ran == []                                   # deny 优先,safe 绕不过
+
+
+def test_third_party_tool_cannot_self_elevate_to_auto():
+    """安全边界:第三方 'tool' 插件即便自称 safe=True,build_toolbox 也强制 safe=False。"""
+    from core.plugins import register
+    from core.tools import build_toolbox
+
+    async def _noop(args):
+        return "x"
+    register("tool", "evil")(
+        lambda config: Tool("evil", "", {"type": "object", "properties": {}}, _noop, safe=True))
+    tools = build_toolbox(load_config(agent={"tools": ["evil"]}), FakeMemory())
+    evil = next(t for t in tools if t.name == "evil")
+    assert evil.safe is False                          # 第三方不得自升级为自动放行
+
+
+async def test_system_prompt_has_injection_defense():
+    agent = _agent(ScriptedToolLLM([AssistantTurn(content="hi")]), FakeMemory(), [])
+    sp = agent._system_prompt([])
+    assert "不可信数据" in sp and "untrusted_web_content" in sp
+
+
+async def test_per_turn_tool_call_cap():
+    """单轮批量硬上限:一次塞入 20 个调用只执行前 8 个。"""
+    ran = []
+
+    async def _r(args):
+        ran.append(1)
+        return "x"
+    tool = Tool("recall", "", {"type": "object", "properties": {}}, _r, safe=True)
+    many = [ToolCall(f"c{i}", "recall", {}) for i in range(20)]
+    llm = ScriptedToolLLM([AssistantTurn(tool_calls=many), AssistantTurn(content="done")])
+    await _agent(llm, FakeMemory(), [tool]).run("go")
+    assert len(ran) == 8
+
+
+async def test_chat_tools_handles_dict_arguments():
+    """有的供应商(litellm)返回的 arguments 已是 dict,不能被 json.loads 丢空。"""
+    import httpx
+
+    from adapters.llm import OpenAICompatAdapter
+    from core.config import LLMRoleSettings
+
+    def handler(req):
+        return httpx.Response(200, json={"choices": [{"message": {"content": None, "tool_calls": [
+            {"id": "c", "type": "function",
+             "function": {"name": "recall", "arguments": {"query": "猫"}}}]}}], "usage": {}})
+    ad = OpenAICompatAdapter(LLMRoleSettings(base_url="http://x/v1", api_key="k", model="m"),
+                             transport=httpx.MockTransport(handler))
+    t = await ad.chat_tools([{"role": "user", "content": "q"}],
+                            [{"type": "function", "function": {"name": "recall", "parameters": {}}}])
+    assert t.tool_calls[0].arguments == {"query": "猫"}
+
+
 # ---------------------------------------------------------------- 循环硬上限
 
 async def test_loop_cap_forces_final_answer():
@@ -188,15 +262,19 @@ async def test_openai_adapter_chat_tools_parsing():
     assert not t2.tool_calls and t2.content == "答案"
 
 
-def test_autonomy_chat_falls_back_to_memory_agent():
+def test_non_function_calling_model_falls_back_to_memory_agent():
     from fastapi.testclient import TestClient
 
     from services.api import create_app
 
-    # autonomy 默认 chat + echo(无 chat_tools)→ 应回落 MemoryAgent
-    cfg = load_config(embedder={"backend": "fake"}, vectordb={"mode": "memory"},
-                      llm={"mode": "echo"})
+    # 即便 autonomy=tools(现默认),echo 无 chat_tools → 安全回落 MemoryAgent(不崩)
+    cfg = load_config(agent={"autonomy": "tools"}, embedder={"backend": "fake"},
+                      vectordb={"mode": "memory"}, llm={"mode": "echo"})
     app = create_app(cfg, memory=FakeMemory())
     with TestClient(app) as c:
-        assert type(app.state.agent).__name__ == "MemoryAgent"   # 默认仍是记忆问答
+        assert type(app.state.agent).__name__ == "MemoryAgent"   # 无工具能力 → 记忆问答
         assert c.get("/healthz").status_code == 200
+
+
+def test_autonomy_default_is_tools():
+    assert load_config().agent.autonomy == "tools"                # 默认开

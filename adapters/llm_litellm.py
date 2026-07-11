@@ -110,8 +110,9 @@ class LiteLLMAdapter:
         calls = []
         for tc in (_get(msg, "tool_calls", None) or []):
             fn = _get(tc, "function", {})
+            raw = _get(fn, "arguments", "{}")
             try:
-                args = json.loads(_get(fn, "arguments", "{}") or "{}")
+                args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
             except (json.JSONDecodeError, TypeError):
                 args = {}
             calls.append(ToolCall(id=_get(tc, "id", ""), name=_get(fn, "name", ""),

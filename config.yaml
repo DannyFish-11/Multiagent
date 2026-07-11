@@ -165,10 +165,10 @@ payments:  # M12 支付笼子(enabled=false 时维持附录 A 默认拒付)
 
 agent:
   top_k: 5
-  # M22:chat = 记忆增强问答(默认);tools = 自主工具循环(LLM 自己决定调工具,
-  # 经审批闸 + 循环上限约束;需 function-calling 模型,即 llm.mode=api/litellm)
-  autonomy: chat
-  tools: [recall, remember]   # tools 模式启用的工具(内置 + 第三方 'tool' 插件名)
+  # M22:tools = 自主工具循环(默认开;LLM 自己决定调工具,经审批闸 + 循环上限约束;
+  # 需 function-calling 模型 llm.mode=api/litellm,否则自动回落记忆问答)。chat = 纯问答。
+  autonomy: tools
+  tools: [recall, remember]   # 默认只装安全工具;上网/付款等危险工具需显式加入 + 审批分级
   system_prompt: |
     你是一个拥有长期记忆的助手。下面的「相关记忆」是你从过往交互中检索到的内容,
     回答时优先利用这些记忆;若记忆与问题无关则忽略。

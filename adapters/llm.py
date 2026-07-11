@@ -230,8 +230,9 @@ class OpenAICompatAdapter:
         calls = []
         for tc in (msg.get("tool_calls") or []):
             fn = tc.get("function", {})
+            raw = fn.get("arguments")
             try:
-                args = json.loads(fn.get("arguments") or "{}")
+                args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
             except (json.JSONDecodeError, TypeError):
                 args = {}
             calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=args))

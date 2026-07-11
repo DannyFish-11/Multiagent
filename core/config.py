@@ -132,10 +132,10 @@ class ServiceSettings(BaseModel):
 class AgentSettings(BaseModel):
     top_k: int = 5
     system_prompt: str = "你是一个拥有长期记忆的助手。"
-    # M22:chat = 记忆增强问答(默认,向后兼容);tools = 自主工具循环
-    # (需 LLM 支持 function-calling,即 api / litellm)
-    autonomy: str = "chat"
-    # tools 模式下启用的工具(内置 recall/remember/web_search/web_fetch + 第三方 'tool' 插件名)
+    # M22:tools = 自主工具循环(默认开;需 function-calling 模型 api/litellm,否则自动
+    # 回落记忆问答);chat = 纯记忆增强问答。默认工具集只含安全的 recall/remember
+    # (自动放行);危险工具(上网/付款等)需显式加入 tools 且按 config 审批分级。
+    autonomy: str = "tools"
     tools: list[str] = Field(default_factory=lambda: ["recall", "remember"])
 
 

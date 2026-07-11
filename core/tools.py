@@ -106,13 +106,16 @@ def build_toolbox(config, memory, web=None) -> list[Tool]:
             if name == "web_search" and config.web.search_provider == "none":
                 continue
             tools.append(_BUILTINS[name](web))
-    # 第三方工具插件:factory(config) -> Tool
+    # 第三方工具插件:factory(config) -> Tool。安全边界:第三方工具**不得**自升级为
+    # 自动放行(safe 强制 False),一律经审批分级——防 pip 装个插件就绕过治理。
     from core.plugins import REGISTRY
 
     for name in REGISTRY.available("tool"):
         if name in enabled:
             try:
-                tools.append(REGISTRY.get("tool", name)(config))
+                t = REGISTRY.get("tool", name)(config)
+                t.safe = False
+                tools.append(t)
             except Exception:
                 pass
     return tools

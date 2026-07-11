@@ -216,3 +216,33 @@ def test_inspect_via_make_task_source(tmp_path):
     src = make_task_source({"type": "inspect", "samples": str(p)}, 0)
     tasks = src.stream()
     assert len(tasks) == 1 and tasks[0].task_id == "x"
+
+
+def test_inspect_task_ref_needs_dep_error_is_accurate():
+    """task 引用但未装 inspect_ai → 明确报缺 inspect_ai(不误导);装了则用户模块错误照实报。"""
+    import importlib.util
+
+    from adapters.task_source_inspect import InspectTaskSource
+
+    src = InspectTaskSource({"type": "inspect", "task": "nope.mod:foo"}, seed=0)
+    if importlib.util.find_spec("inspect_ai") is None:
+        with pytest.raises(LayerError) as ei:
+            src.stream()
+        assert "inspect_ai" in str(ei.value)           # 缺依赖时报缺依赖
+    else:
+        with pytest.raises(LayerError) as ei:
+            src.stream()
+        assert "加载 Inspect Task 失败" in str(ei.value)  # 装了则报用户模块错误,不误导
+
+
+def test_discovery_reentrancy_guard(monkeypatch):
+    """entry-point 回调在发现过程中回调进注册表(available)不死锁、不重复发现。"""
+    reg = PluginRegistry()
+
+    def _hook(registry):
+        registry.available("llm")      # 发现进行中回调进来
+        registry.add("tool", "reentrant", lambda: "R")
+
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "entry_points", lambda group=None: [_FakeEP("bundle", _hook)])
+    assert reg.get("tool", "reentrant")() == "R"

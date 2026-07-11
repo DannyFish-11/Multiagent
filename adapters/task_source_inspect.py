@@ -54,6 +54,10 @@ class InspectTaskSource:
         if not ref:
             raise LayerError("L14", "inspect",
                              "inspect 任务源需 spec.task(mod:attr)或 spec.samples(文件)")
+        import importlib.util
+
+        if importlib.util.find_spec("inspect_ai") is None:   # 只有缺依赖才报缺依赖
+            raise LayerError("L14", "inspect", "缺 inspect_ai 依赖:uv sync --extra inspect")
         try:
             import importlib
 
@@ -62,10 +66,7 @@ class InspectTaskSource:
             task_obj = task_obj() if callable(task_obj) else task_obj
             dataset = getattr(task_obj, "dataset", task_obj)
             return list(dataset)
-        except ImportError as exc:
-            raise LayerError("L14", "inspect",
-                             "缺 inspect_ai 依赖:uv sync --extra inspect") from exc
-        except Exception as exc:
+        except Exception as exc:   # 用户模块本身的导入/属性错误照实报,不误导为缺 inspect_ai
             raise LayerError("L14", "inspect", f"加载 Inspect Task 失败({ref}): {exc}") from exc
 
     def stream(self) -> list[Task]:

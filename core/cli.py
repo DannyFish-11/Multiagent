@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -24,11 +25,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = PROJECT_ROOT / "scripts"
 
-SECRET_HINT = ("key", "secret", "token", "password", "api_key")
+# 键名含以下词的非空值整体脱敏(webhook_url 本身即 bearer 秘密)
+SECRET_HINT = ("key", "secret", "token", "password", "api_key", "webhook")
+# 值里 URL 内嵌的 user:pass@ 凭据也脱敏(不影响普通 base_url 展示)
+_URL_CRED = re.compile(r"://[^/@\s]+:[^/@\s]+@")
 
 
 def _redact(obj):
-    """递归脱敏:键名含 key/secret/token/password 的非空值 → ***。"""
+    """递归脱敏:键名命中秘密词的非空值 → ***;字符串里 URL 内嵌凭据 → ://***@。"""
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
@@ -39,6 +43,8 @@ def _redact(obj):
         return out
     if isinstance(obj, list):
         return [_redact(x) for x in obj]
+    if isinstance(obj, str):
+        return _URL_CRED.sub("://***@", obj)
     return obj
 
 

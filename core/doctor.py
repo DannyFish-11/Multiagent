@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import importlib.util
-import tempfile
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,14 +30,11 @@ def _installed(mod: str) -> bool:
 
 
 def _dir_writable(path: str) -> bool:
-    p = Path(path)
-    try:
-        p.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=p, delete=True):
-            pass
-        return True
-    except OSError:
-        return False
+    """能否在此持久化(可创建/可写);只读判断,不实际创建目录。"""
+    probe = Path(path)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent          # 上溯到最近的已存在祖先
+    return os.access(probe, os.W_OK)
 
 
 def _load_registry():
@@ -66,6 +63,10 @@ def run_doctor(config) -> list[Check]:
         if mode == "api":
             if config.llm.chat.base_url and config.llm.chat.model:
                 checks.append(Check("ok", f"LLM=api({config.llm.chat.model})"))
+                if not config.llm.chat.api_key or config.llm.chat.api_key == "EMPTY":
+                    checks.append(Check("warn", "LLM=api 未配 api_key",
+                                        "多数云供应商需要;自建/兼容网关可留空",
+                                        "填 MEMORY_AGENT_LLM__CHAT__API_KEY"))
             else:
                 checks.append(Check("fail", "LLM=api 缺 base_url/model",
                                     "", "填 MEMORY_AGENT_LLM__CHAT__BASE_URL 与 __MODEL(make setup)"))

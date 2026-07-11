@@ -45,6 +45,7 @@ class PluginRegistry:
         self._plugins: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._discovered = False
+        self._discovering = False
 
     # ---- 注册 ----
 
@@ -66,14 +67,17 @@ class PluginRegistry:
         if self._discovered:
             return
         with self._lock:
-            if self._discovered:
+            # 完成标志(_discovered)只在填充完成后置位;发现进行中用 _discovering
+            # 作可重入守卫(entry-point 回调若回调进注册表,不重复发现也不死锁)。
+            if self._discovered or self._discovering:
                 return
-            self._discovered = True
+            self._discovering = True
             try:
                 from importlib.metadata import entry_points
                 eps = entry_points(group=ENTRY_POINT_GROUP)
             except Exception as exc:  # 发现失败绝不拖垮主流程
                 logger.debug("entry_points 发现跳过: %s", exc)
+                self._discovered = True
                 return
             for ep in eps:
                 try:
@@ -90,6 +94,7 @@ class PluginRegistry:
                         target(self)  # 回调式:自行注册多个
                     except Exception as exc:
                         logger.warning("插件注册回调失败 %r: %s", ep.name, exc)
+            self._discovered = True   # 填充全部完成后才置位(并发读不会看到半表)
 
     # ---- 解析 ----
 

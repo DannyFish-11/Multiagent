@@ -18,13 +18,23 @@ def test_doctor_demo_profile_passes():
     assert not [c for c in checks if c.level == "fail"]
 
 
-def test_doctor_api_missing_key_fails():
+def test_doctor_api_missing_endpoint_fails():
     cfg = load_config(llm={"mode": "api"}, embedder={"backend": "fake"},
                       vectordb={"mode": "memory"})   # api 缺 base_url/model
     checks = run_doctor(cfg)
     _report, ok = render(checks)
     assert ok is False
     assert any(c.level == "fail" and "api" in c.title for c in checks)
+
+
+def test_doctor_api_endpoint_ok_but_no_key_warns_not_fails():
+    cfg = load_config(
+        llm={"mode": "api", "chat": {"base_url": "http://gw", "model": "m"}},  # 无 key
+        embedder={"backend": "fake"}, vectordb={"mode": "memory"})
+    checks = run_doctor(cfg)
+    _report, ok = render(checks)
+    assert ok is True                                  # 无 key 只是 ⚠️,不拦
+    assert any(c.level == "warn" and "api_key" in c.title for c in checks)
 
 
 def test_doctor_jina_missing_key_fails():
@@ -46,13 +56,17 @@ def test_doctor_unknown_plugin_name_fails():
 def test_redact_hides_secrets():
     red = _redact({
         "api_key": "sk-xxx", "secret_key": "s", "password": "p", "token": "t",
+        "webhook_url": "https://hooks.slack.com/services/T/B/SECRET",   # 整条即秘密
         "model": "gpt-4o", "nested": {"jina_api_key": "j", "base_url": "u"}, "empty_key": "",
+        "creds_url": "https://user:pA55w0rd@api.host/v1",              # URL 内嵌凭据
     })
     assert red["api_key"] == "***" and red["secret_key"] == "***"
     assert red["password"] == "***" and red["token"] == "***"
+    assert red["webhook_url"] == "***"                                 # 名含 webhook → 整条脱敏
     assert red["model"] == "gpt-4o" and red["nested"]["base_url"] == "u"
     assert red["nested"]["jina_api_key"] == "***"
-    assert red["empty_key"] == ""                      # 空值不脱敏(仍是空)
+    assert red["empty_key"] == ""                                      # 空值不脱敏(仍是空)
+    assert red["creds_url"] == "https://***@api.host/v1"               # 只抹掉 user:pass
 
 
 # ---------------------------------------------------------------- CLI 调度
@@ -95,6 +109,10 @@ def test_config_and_plugins_routes_redacted():
         assert conf.json()["llm"]["chat"]["api_key"] == "***"
         plugins = c.get("/plugins").json()
         assert "echo" in plugins["llm"] and "fake" in plugins["embedder"]
+        # /plugins 必须报全五类(曾漏 cloud_provider/task_source:未 import 触发注册)
+        assert "local" in plugins.get("cloud_provider", [])
+        assert {"synthetic", "replay", "inspect"} <= set(plugins.get("task_source", []))
+        assert "qdrant" in plugins.get("memory", [])
 
 
 def test_web_ui_served_at_root():

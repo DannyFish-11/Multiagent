@@ -66,14 +66,17 @@ class ToolAgent:
         tool = self._tools.get(call.name)
         if tool is None:
             return f"未知工具:{call.name}"
+        from core.tools import sanitize_tool_args
+
+        args = sanitize_tool_args(call.arguments)   # M30:剥除 LLM 自称的 _source
 
         async def _do():
-            return await tool.run(call.arguments)
+            return await tool.run(args)
 
         try:
             if self._approval is not None:
                 return await self._approval.gate(
-                    action=tool.action or tool.name, params=call.arguments, execute=_do,
+                    action=tool.action or tool.name, params=args, execute=_do,
                     source="user", agent_id="", session_id=session_id,
                     level_override="auto" if tool.safe else None)
             return await _do()

@@ -2,6 +2,24 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.11.0 — 作用域授权令牌 + 来源可信闸(M30)
+
+借鉴 B2B 多 agent 白皮书里我们**尚缺**的两块治理(身份/审批/审计/支付笼子等已有):
+
+- **① Delegation Token(`core/delegation.py`)**:给一次自主运行套"临时工牌"——`permissions`
+  (许可动作 fnmatch)/`max_budget_usd`(累计花费上限)/`valid_until`(时效)/`transferable`
+  (不可转授权)。由 agent 身份 **Ed25519 签名**(复用 M5,不引新依赖),`verify()` 校验签名+时效。
+  审批闸强制其作用域,且**先于 level_override**——安全工具(auto)也绕不过过期/越权/超支的
+  令牌(与"显式 deny 盖过 auto"同一不变量)。默认关(`delegation.enabled`)。
+- **② 来源可信闸(provenance)**:`approval.require_verified_source` 列出的动作必须依据可信
+  来源数据(`params._source ∈ trusted_sources`),否则 deny——**LLM 臆造的值不得触发改动性
+  动作**。关键:agent 在进闸前**剥除 LLM 自称的 `_source`**(`sanitize_tool_args`),故模型无法
+  自证来源;pure-LLM 循环里受限动作 fail-closed,须可信上游注入 `_source` 才放行。
+- 安全加固(对抗式审计 6 项 → 已修/已记):预算改**原子预留+失败退款**(杜绝并发 TOCTOU
+  超支);负额直接拒(修"负数充值预算");金额兼容字符串(修 fail-open);confirm 批准后
+  **重校验时效**(不用陈旧授权执行);verify 自证与 spent 非持久化两项边界已在 docstring 载明。
+- `services` 启用时签发令牌并挂到审批闸;`doctor` 预检 permissions/provenance;config.yaml 示例。
+
 ## 0.10.0 — 编排层可观测性(M29:agent 执行树进 Langfuse)
 
 - **`TracedAgent`**:把 agent 编排层也接入 M20 的 OTel/Langfuse。此前只追踪 LLM/嵌入/记忆

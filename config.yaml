@@ -147,6 +147,18 @@ approval:  # M9.2 审批中枢(无 Omnigent 形态的危险动作守门人)
     - {action: "gmail_archive",when: {}, level: confirm}
     - {action: "payment", when: {amount_usd__gte: 1.0}, level: confirm, reason: "≥$1 需确认"}
     - {action: "payment", when: {}, level: auto}
+  # M30 ② 来源可信闸:这些动作(fnmatch)必须依据可信来源数据,否则 deny(先于分级,deny 优先)。
+  # 例:付款/发信须依据可验证数据,LLM 臆造的值(_source=llm_output 或缺失)不得触发。
+  require_verified_source: []        # 如 [payment, web_submit, gmail_send]
+  trusted_sources: [erp_verified, verified, system, user]
+
+delegation:  # M30 ① 作用域授权令牌(默认关;开启由 agent 身份签发,审批闸强制其范围)
+  enabled: false
+  task: ""                           # 任务描述(审计可读)
+  permissions: []                    # 许可动作 fnmatch,如 [recall, remember, web_search, web_fetch]
+  max_budget_usd: 0.0                # 累计花费上限(0=不限;按动作参数 amount_usd 累计)
+  ttl_s: 0.0                         # 令牌时效秒(0=不过期)
+  transferable: false                # 不可转授权(A2A 再委派须重签)
 
 web:  # M10 上网(供应商与 key 由人类指定 → .env)
   search_provider: none          # tavily | serper | none

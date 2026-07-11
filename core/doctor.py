@@ -223,6 +223,24 @@ def run_doctor(config) -> list[Check]:
     elif prov == "ray" and not _installed("ray"):
         checks.append(Check("fail", "cloud.provider=ray 但未装 ray", "", "uv sync --extra ray"))
 
+    # ---- 授权令牌 + 来源可信(M30) ----
+    if config.delegation.enabled:
+        if config.delegation.permissions:
+            ttl = config.delegation.ttl_s
+            budget = config.delegation.max_budget_usd
+            checks.append(Check("ok", "delegation 令牌已启用",
+                                f"permissions={config.delegation.permissions} · "
+                                f"预算={'∞' if budget <= 0 else budget} · "
+                                f"时效={'不过期' if ttl <= 0 else f'{ttl}s'}"))
+        else:
+            checks.append(Check("fail", "delegation.enabled 但 permissions 为空",
+                                "空许可 = 令牌下什么动作都做不了",
+                                "配 delegation.permissions(如 [recall, remember, web_*])或关掉"))
+    if config.approval.require_verified_source:
+        checks.append(Check("ok", "来源可信闸已启用(provenance)",
+                            f"需可信来源的动作:{config.approval.require_verified_source};"
+                            f"可信来源:{config.approval.trusted_sources}"))
+
     # ---- 预算护栏 ----
     if config.budget.daily_usd and config.budget.daily_usd > 0:
         checks.append(Check("ok", f"日预算硬闸 ${config.budget.daily_usd}"))

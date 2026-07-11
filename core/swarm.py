@@ -82,12 +82,16 @@ class SwarmAgent:
     async def _gate(self, member: SwarmMember, tool, call, session_id: str) -> str:
         """经审批闸执行一个工具(safe → level_override=auto,但显式 deny 仍生效)。
         **不吞异常**:被拒/超时会抛出,由调用方决定后续(普通工具回灌错误,转交则不切换)。"""
+        from core.tools import sanitize_tool_args
+
+        args = sanitize_tool_args(call.arguments)   # M30:剥除 LLM 自称的 _source
+
         async def _do():
-            return await tool.run(call.arguments)
+            return await tool.run(args)
 
         if self._approval is not None:
             return await self._approval.gate(
-                action=tool.action or tool.name, params=call.arguments, execute=_do,
+                action=tool.action or tool.name, params=args, execute=_do,
                 source="user", agent_id=member.name, session_id=session_id,
                 level_override="auto" if tool.safe else None)
         return await _do()

@@ -92,6 +92,18 @@ def web_fetch_tool(web) -> Tool:
                 run, action="web_fetch")
 
 
+# M30 ②:只有**可信代码**可注入的元字段;LLM 生成的工具参数里一律剥除,防其自证数据来源
+# 绕过 provenance 闸(_source 必须由系统/可信上游打标,不能由模型在 tool_call 参数里声称)。
+_RESERVED_META = ("_source",)
+
+
+def sanitize_tool_args(args: dict) -> dict:
+    """剥除 LLM 工具参数里的可信元字段(_source 等)。非 dict 原样返回。"""
+    if not isinstance(args, dict):
+        return args
+    return {k: v for k, v in args.items() if k not in _RESERVED_META}
+
+
 def handoff_tool(target: str) -> Tool:
     """转交工具(M24 swarm):LLM 调用它即把控制权手递手交给 named 成员 target。
     去中心化——由当前成员自主决定交给谁,无中央调度器。safe=True(转交本身是内部

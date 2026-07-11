@@ -79,6 +79,19 @@ def create_app(
         app.state.audit = AuditLog(cfg.approval.audit_path)
         app.state.approvals = ApprovalQueue(
             cfg.approval, app.state.audit, Notifier(cfg.approval))
+        # M30:启用时由 agent 身份签发作用域授权令牌,审批闸强制其 permissions/预算/时效
+        if cfg.delegation.enabled:
+            from core.delegation import issue
+
+            token = issue(app.state.identity, task=cfg.delegation.task,
+                          permissions=cfg.delegation.permissions,
+                          max_budget_usd=cfg.delegation.max_budget_usd,
+                          ttl_s=cfg.delegation.ttl_s, transferable=cfg.delegation.transferable)
+            app.state.approvals.set_delegation(token)
+            app.state.delegation = token
+            logger.info("delegation token 已签发:permissions=%s budget=%s ttl_s=%s",
+                        cfg.delegation.permissions, cfg.delegation.max_budget_usd,
+                        cfg.delegation.ttl_s)
         # 装配 agent(需 function-calling 模型):autonomy=supervisor → 中心调度委派(M25);
         # swarm → 去中心化多成员(M24);tools → 会用工具的单 agent(M22);否则 → 回落记忆问答。
         _fc = hasattr(_llm, "chat_tools")

@@ -232,6 +232,22 @@ class ApprovalSettings(BaseModel):
     webhook_url: str = ""
     default_level: Literal["auto", "confirm", "deny"] = "confirm"  # 无规则命中时保守 confirm
     policies: list[PolicyRule] = Field(default_factory=list)
+    # M30 ② Provenance:这些动作(fnmatch)必须依据可信来源数据,否则 deny——LLM 臆造的
+    # 值(_source=llm_output 或缺失)不得触发改动性动作。params["_source"] ∈ trusted_sources 才放行。
+    require_verified_source: list[str] = Field(default_factory=list)
+    trusted_sources: list[str] = Field(
+        default_factory=lambda: ["erp_verified", "verified", "system", "user"])
+
+
+class DelegationSettings(BaseModel):
+    """M30 ① 作用域授权令牌:给自主运行套"临时工牌"。默认关(需显式签发);
+    开启后由 agent 身份签发一张令牌,审批闸强制其 permissions/预算/时效(治理刚性)。"""
+    enabled: bool = False
+    task: str = ""
+    permissions: list[str] = Field(default_factory=list)   # 许可动作 fnmatch(空=什么都不许)
+    max_budget_usd: float = 0.0                             # 0=不限
+    ttl_s: float = 0.0                                     # 0=不过期
+    transferable: bool = False
 
 
 class WebSettings(BaseModel):
@@ -364,6 +380,7 @@ class AppConfig(BaseSettings):
     metabolism: MetabolismSettings = Field(default_factory=MetabolismSettings)
     concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
     approval: ApprovalSettings = Field(default_factory=ApprovalSettings)
+    delegation: DelegationSettings = Field(default_factory=DelegationSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     gmail_poll: GmailPollSettings = Field(default_factory=GmailPollSettings)
     payments: PaymentsSettings = Field(default_factory=PaymentsSettings)

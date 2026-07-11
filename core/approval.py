@@ -21,6 +21,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any, Awaitable, Callable
 
 from core.audit import AuditLog
@@ -64,15 +65,65 @@ class PendingApproval:
 
 class ApprovalQueue:
     def __init__(self, settings: ApprovalSettings, audit: AuditLog,
-                 notifier: "Notifier | None" = None) -> None:
+                 notifier: "Notifier | None" = None, delegation=None) -> None:
         self._settings = settings
         self._audit = audit
         self._notifier = notifier
         self._pending: dict[str, PendingApproval] = {}
         self._lock = asyncio.Lock()
+        self._delegation = delegation      # M30:作用域授权令牌(None=不启用作用域约束)
+
+    def set_delegation(self, token) -> None:
+        """设置/更换当前作用域授权令牌(M30)。"""
+        self._delegation = token
 
     def classify(self, action: str, params: dict) -> tuple[str, str]:
         return evaluate(self._settings.policies, self._settings.default_level, action, params)
+
+    # ---- M30:令牌作用域 + 来源可信 硬约束(先于 level_override,deny 优先) ----
+
+    @staticmethod
+    def _amount(params: dict) -> float:
+        """从参数取金额(用于令牌预算)。约定键 amount_usd(与审批策略引擎一致);
+        兼容 amount/usd 及字符串数字。解析不出返回 0(=非计费动作)。"""
+        for k in ("amount_usd", "amount", "usd"):
+            v = params.get(k)
+            if isinstance(v, bool):          # bool 是 int 子类,排除
+                continue
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v.strip())
+                except ValueError:
+                    continue
+        return 0.0
+
+    def _scope_deny(self, action: str, params: dict) -> str | None:
+        """令牌作用域硬约束(不含预算——预算走原子预留)。expired/越权/金额非法 → deny。"""
+        tok = self._delegation
+        if tok is None:
+            return None
+        if tok.expired():
+            return f"授权令牌已过期(token={tok.token_id})"
+        if not tok.allows(action):
+            return f"动作 {action!r} 不在授权令牌许可范围 {list(tok.permissions)}"
+        if self._amount(params) < 0:         # 负额:检查与记账的钳制不对称会成漏洞,直接拒
+            return f"金额非法(负数):{self._amount(params)}"
+        return None
+
+    def _provenance_deny(self, action: str, params: dict) -> str | None:
+        """来源可信闸。注意:_source 必须由**可信代码**注入——LLM 产生的工具参数在进入
+        审批闸前已被 agent 剥除 _source(见 core.tools.sanitize_tool_args),因此 LLM 无法
+        自证来源;pure-LLM 循环里受限动作若无可信上游注入 _source 将 fail-closed 被拒。"""
+        pats = self._settings.require_verified_source
+        if not pats or not any(fnmatch(action, p) for p in pats):
+            return None
+        src = params.get("_source", "")
+        if src in self._settings.trusted_sources:
+            return None
+        return (f"动作 {action!r} 需可信数据来源(当前 _source={src or '缺失'!r};"
+                "llm_output 等不可信来源被拒)")
 
     def list_pending(self) -> list[dict]:
         return [p.public() for p in self._pending.values()]
@@ -91,7 +142,13 @@ class ApprovalQueue:
                    source: str = "user", agent_id: str = "", session_id: str = "",
                    level_override: str | None = None) -> Any:
         """按级别放行/入队/拒绝一次危险动作。返回 execute() 结果(auto/approved)。"""
-        if level_override:
+        # M30:令牌越权/过期/金额非法 与 来源不可信 属**硬约束**,先于 level_override 判定,
+        # deny 优先(安全工具的 auto 也绕不过——与"显式 deny 盖过 auto"同一不变量)。预算不在
+        # 此处判(避免 check→execute 之间的 TOCTOU),而在放行后**原子预留**。
+        hard_deny = self._scope_deny(action, params) or self._provenance_deny(action, params)
+        if hard_deny:
+            level, reason = "deny", hard_deny
+        elif level_override:
             # 调用方给的 override(如安全工具的 auto)不得盖过**显式 deny 策略**:
             # 仍走一次分级,命中 deny 则 deny 优先(防工具自升级绕过治理)。
             classified, creason = self.classify(action, params)
@@ -113,36 +170,60 @@ class ApprovalQueue:
                 await self._notifier.notify(f"[DENY] {action}: {reason}")
             raise ApprovalDenied(action, reason)
 
-        if level == "confirm":
-            pa = PendingApproval(id=uuid.uuid4().hex, action=action, params=params,
-                                 source=source, agent_id=agent_id, session_id=session_id,
-                                 reason=reason)
+        # M30 预算:原子**预留**(check+扣款在同一把锁内,杜绝并发超支 TOCTOU);
+        # 动作最终未成功(拒绝/超时/过期/执行异常)则在 finally 里退款。
+        amt = self._amount(params)
+        reserved = self._delegation is not None and amt > 0
+        if reserved:
             async with self._lock:
-                self._pending[pa.id] = pa
-            if self._notifier:
-                await self._notifier.notify(
-                    f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}")
-            try:
-                await asyncio.wait_for(pa._event.wait(), timeout=self._settings.timeout_s)
-            except asyncio.TimeoutError:
+                if not self._delegation.budget_ok(amt):
+                    reserved = False
+                    await _audit("denied")
+                    raise ApprovalDenied(action, f"超授权预算(余额 "
+                                         f"{self._delegation.remaining_budget():.2f},本次 {amt:.2f})")
+                self._delegation.spent_usd += amt
+
+        committed = False
+        try:
+            if level == "confirm":
+                pa = PendingApproval(id=uuid.uuid4().hex, action=action, params=params,
+                                     source=source, agent_id=agent_id, session_id=session_id,
+                                     reason=reason)
+                async with self._lock:
+                    self._pending[pa.id] = pa
+                if self._notifier:
+                    await self._notifier.notify(
+                        f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}")
+                try:
+                    await asyncio.wait_for(pa._event.wait(), timeout=self._settings.timeout_s)
+                except asyncio.TimeoutError:
+                    async with self._lock:
+                        self._pending.pop(pa.id, None)
+                    await _audit("timeout")
+                    raise ApprovalTimeout(action, self._settings.timeout_s) from None
                 async with self._lock:
                     self._pending.pop(pa.id, None)
-                await _audit("timeout")
-                raise ApprovalTimeout(action, self._settings.timeout_s) from None
-            async with self._lock:
-                self._pending.pop(pa.id, None)
-            if pa._decision != "approved":
-                await _audit("rejected")
-                raise ApprovalDenied(action, "人工拒绝")
-            # 批准 → 执行
-            result = await execute()
-            await _audit("approved", result=result)
-            return result
+                if pa._decision != "approved":
+                    await _audit("rejected")
+                    raise ApprovalDenied(action, "人工拒绝")
+                # M30:等待期间令牌可能过期——批准后、执行前**重新校验**授权(不用陈旧授权执行)
+                if self._delegation is not None and self._delegation.expired():
+                    await _audit("denied")
+                    raise ApprovalDenied(action, "令牌在等待人工审批期间已过期")
+                result = await execute()
+                committed = True
+                await _audit("approved", result=result)
+                return result
 
-        # auto
-        result = await execute()
-        await _audit("executed", result=result)
-        return result
+            # auto
+            result = await execute()
+            committed = True
+            await _audit("executed", result=result)
+            return result
+        finally:
+            if reserved and not committed:               # 未成功 → 退款,不占用预算
+                async with self._lock:
+                    self._delegation.spent_usd -= amt
 
 
 class Notifier:

@@ -48,14 +48,13 @@ def main() -> int:
         if msg == "/mem":
             print("上一轮命中记忆:", [m.get("content") for m in last_mem] or "(无)")
             continue
-        # M26/M27:走流式端点,逐 token 打印(chat 档真流式;工具/多 agent 档整段一次性)
+        # M26/M28:走流式端点,先显示步骤进度(工具/流转),再逐 token 打印答案。
         try:
-            print("助手 > ", end="", flush=True)
             got_token = False
             with httpx.stream("POST", f"{BASE}/chat/stream",
                               json={"message": msg, "session_id": session}, timeout=180) as resp:
                 if resp.status_code != 200:
-                    print(f"\n⚠️  HTTP {resp.status_code}", file=sys.stderr)
+                    print(f"⚠️  HTTP {resp.status_code}", file=sys.stderr)
                     continue
                 for line in resp.iter_lines():
                     if not line.startswith("data:"):
@@ -65,14 +64,22 @@ def main() -> int:
                     except ValueError:
                         continue
                     kind = ev.get("type")
-                    if kind == "token":
+                    if kind == "step" and not got_token:
+                        if ev.get("kind") == "handoff":
+                            print(f"  ↪ {ev.get('detail', ev.get('name'))}", flush=True)
+                        elif ev.get("status") == "start":
+                            print(f"  · {ev.get('name')}…", flush=True)
+                    elif kind == "token":
+                        if not got_token:
+                            print("助手 > ", end="", flush=True)
+                            got_token = True
                         print(ev.get("text", ""), end="", flush=True)
-                        got_token = True
                     elif kind == "meta":
                         last_mem = ev.get("memories_used", [])
                     elif kind == "error":
                         print(f"\n⚠️  {ev.get('message')}", file=sys.stderr)
-            print()  # 收尾换行
+            if got_token:
+                print()  # 收尾换行
         except Exception as exc:
             print(f"\n⚠️  请求失败:{exc}", file=sys.stderr)
             continue

@@ -114,7 +114,7 @@ CHAT_HTML = """<!doctype html>
         body: JSON.stringify({ message: msg, session_id: session }) });
       if(!r.ok || !r.body){ thinking.textContent = '⚠️ 出错 HTTP ' + r.status; busy=false; return; }
       const reader = r.body.getReader(), dec = new TextDecoder();
-      let buf='', text='', mems=null, started=false, idx;
+      let buf='', text='', mems=null, started=false, steps=[], idx;
       while(true){
         const {done, value} = await reader.read();
         if(done) break;
@@ -124,6 +124,14 @@ CHAT_HTML = """<!doctype html>
           if(!line.startsWith('data:')) continue;
           let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch(_){ continue; }
           if(ev.type==='token'){ if(!started){ text=''; started=true; } text += ev.text; thinking.textContent = text; }
+          else if(ev.type==='step'){
+            // 未出正文前,展示实时进度(调用工具 / 成员流转);token 一到即被答案取代
+            if(!started){
+              if(ev.kind==='handoff') steps.push('↪ 转交 ' + ev.name);
+              else if(ev.status==='start') steps.push('· ' + ev.name + '…');
+              thinking.textContent = steps.join('\n');
+            }
+          }
           else if(ev.type==='meta'){ mems = ev.memories_used; }
           else if(ev.type==='error'){ thinking.textContent = '⚠️ ' + ev.message; }
         }

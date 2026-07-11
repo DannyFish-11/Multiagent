@@ -38,6 +38,8 @@ class Tool:
     run: Callable[[dict], Awaitable[str]]
     action: str = ""                                  # 审批动作名(默认=name)
     safe: bool = False                                # True → 审批 level_override=auto
+    handoff_to: str = ""                              # 非空 → 这是转交工具(M24 swarm),
+    #                                                   调用即把控制权交给该 named 成员
 
     def spec(self) -> dict:
         """OpenAI function-calling 规格。"""
@@ -90,13 +92,28 @@ def web_fetch_tool(web) -> Tool:
                 run, action="web_fetch")
 
 
+def handoff_tool(target: str) -> Tool:
+    """转交工具(M24 swarm):LLM 调用它即把控制权手递手交给 named 成员 target。
+    去中心化——由当前成员自主决定交给谁,无中央调度器。safe=True(转交本身是内部
+    路由,不触外部动作;经审计但默认直放),受 swarm 转接链上限约束防 A↔B 乒乓。"""
+    async def run(args: dict) -> str:
+        return f"已转交给 {target}"
+    return Tool(
+        f"transfer_to_{target}",
+        f"把当前任务转交给「{target}」成员处理;在 reason 里附上给对方的上下文。",
+        {"type": "object", "properties": {
+            "reason": {"type": "string", "description": "转交原因 / 给接手成员的上下文"}}},
+        run, action=f"handoff:{target}", safe=True, handoff_to=target)
+
+
 _BUILTINS = {"recall": recall_tool, "remember": remember_tool,
              "web_search": web_search_tool, "web_fetch": web_fetch_tool}
 
 
-def build_toolbox(config, memory, web=None) -> list[Tool]:
-    """按 config.agent.tools 组装启用的工具(内置 + 第三方 'tool' 插件)。"""
-    enabled = list(config.agent.tools)
+def build_toolbox(config, memory, web=None, names=None) -> list[Tool]:
+    """按工具名组装工具(内置 + 第三方 'tool' 插件)。names 缺省用 config.agent.tools;
+    swarm 成员传各自的 names 组装私有工具箱。"""
+    enabled = list(config.agent.tools if names is None else names)
     tools: list[Tool] = []
     for name in enabled:
         if name in ("recall", "remember"):

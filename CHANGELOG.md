@@ -2,6 +2,19 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.5.0 — 去中心化 Swarm(M24:成员手递手传任务)
+
+- **`agent.autonomy=swarm`**:去中心化多成员 agent——named 成员之间**自主转交**任务,无中央
+  调度器(蜂群式)。不引 langgraph:**转交=一个 Tool**(`transfer_to_<成员>`),整段循环
+  复用既有治理——每步工具过审批闸(M9.2)、转接链受 `loops.delegation_chain` 硬上限(防
+  A↔B 乒乓,触顶 `loop_capped` 不静默)、成本进 CostLedger、跨成员共享同一段对话转录、对
+  不可信数据保持注入防御(其他成员/工具产出不当作指令)。
+- 配 `swarm.members`(名字 + 人设 prompt + 私有 tools + handoffs);`build_swarm` 装配期
+  fail-fast 校验(空/重名/坏 entry/悬空 handoff),`doctor` 预检同款。需 function-calling
+  模型;非 fc 模型或缺成员**安全回落** MemoryAgent。`SwarmAgent` 是 MemoryAgent 的 drop-in。
+- `Tool` 加 `handoff_to` 字段;`build_toolbox(names=…)` 支持按成员组装私有工具箱(向后兼容)。
+- Harness Profile 亦作用于 swarm(每成员人设 + 采样 + 结果截断)。docs/PLUGINS.md 加 swarm 段。
+
 ## 0.4.0 — Harness Profiles(M23:让开源模型发挥真实水平)
 
 - **Harness Profile**:按模型打包的"脚手架"(系统提示 + 采样参数 + 工具循环处理),做成

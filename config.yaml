@@ -187,6 +187,19 @@ agent:
     你是一个拥有长期记忆的助手。下面的「相关记忆」是你从过往交互中检索到的内容,
     回答时优先利用这些记忆;若记忆与问题无关则忽略。
 
+swarm:  # M24 去中心化多成员(autonomy=swarm 时生效;蜂群式手递手,无中央调度器)
+  # 默认空 → 未配则 autonomy=swarm 安全回落。转接链上限用 loops.delegation_chain,
+  # 总步数上限用 loops.swarm_steps(未配则回落 loops.default_max_iterations)。
+  entry: ""        # 起始成员名(空=members 第一个)
+  members: []      # 例(取消注释即用,需 llm.mode=api/litellm):
+  #   - {name: intake,  prompt: "你是接单员。技术问题转 tech、财务问题转 finance,禁止直接回答。",
+  #      handoffs: [tech, finance]}
+  #   - {name: tech,    prompt: "你是技术专员,处理登录/系统故障。处理完转 summary。",
+  #      tools: [recall, remember], handoffs: [summary]}
+  #   - {name: finance, prompt: "你是财务专员,处理发票/报销/扣费。处理完转 summary。",
+  #      handoffs: [summary]}
+  #   - {name: summary, prompt: "你是总结专员,整合前面内容给出面向用户的最终答复,流程到此结束。"}
+
 budget:  # PHASE2.5 M-A 成本护栏(adapter 层,不依赖 Omnigent 在场)
   daily_usd: 5.0
   ledger_path: ./data/cost_ledger.json

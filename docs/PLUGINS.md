@@ -106,6 +106,31 @@ def _p():
 
 ---
 
+## Swarm(M24)—— 去中心化多成员,手递手传任务
+
+`agent.autonomy=swarm`:多个 named 成员之间**自主转交**任务,无中央调度器(蜂群式)。
+不引 langgraph——**转交就是一个 Tool**,整段循环复用既有治理:每步工具过审批闸、转接链
+受 `loops.delegation_chain` 上限(防 A↔B 乒乓 → `loop_capped` 不静默)、成本进 CostLedger、
+跨成员共享同一段对话、对不可信数据保持注入防御。需 function-calling 模型;缺成员安全回落。
+
+配 `swarm.members`(config / `.env`):
+```yaml
+agent: {autonomy: swarm}
+swarm:
+  entry: intake          # 起始成员(空=第一个)
+  members:
+    - {name: intake,  prompt: "你是接单员。技术问题转 tech、财务转 finance,禁止直接回答。",
+       handoffs: [tech, finance]}
+    - {name: tech,    prompt: "你是技术专员。处理完转 summary。",
+       tools: [recall, remember], handoffs: [summary]}
+    - {name: finance, prompt: "你是财务专员。处理完转 summary。", handoffs: [summary]}
+    - {name: summary, prompt: "你是总结专员,整合内容给最终答复,流程到此结束。"}
+```
+每个成员 = 名字 + 人设 prompt + 私有 `tools`(同 `agent.tools` 的名字池)+ 可转交的
+`handoffs`。`memory-agent doctor` 会预检成员配置(空/重名/坏 entry/悬空 handoff)。
+
+---
+
 ## 树外插件(pip 装个包就被发现,不改本仓库)
 
 在你的第三方包 `pyproject.toml` 里声明 entry point group `memory_agent.plugins`:

@@ -107,6 +107,7 @@ class OpenAICompatAdapter:
         self._max_retries = max(0, role.max_retries)
         self._backoff_s = role.retry_backoff_s
         self._timeout_s = role.timeout_s
+        self._stream_usage = getattr(role, "stream_usage", False)   # M26:流式内取 usage(默认关)
         self._ledger = ledger
         self._transport = transport
         self._clients: dict[int, httpx.AsyncClient] = {}
@@ -201,6 +202,53 @@ class OpenAICompatAdapter:
                 raise LayerError("L0", "openai-compat", f"空回复: {data}")
             return content
         raise LayerError("L0", "openai-compat", "没有可用端点")
+
+    async def chat_stream(self, messages: list[Message], **kw: Any):
+        """流式 chat(M26):SSE 逐块 yield 文本增量。用当前 active 端点(流已开始难无缝
+        failover,故不做端点切换);usage(供应商回传时)在流末记账。出错抛 LayerError。"""
+        import json as _json
+
+        if self._ledger is not None:
+            self._ledger.check_budget()
+        idx = self._active
+        ep = self._endpoints[idx]
+        payload: dict[str, Any] = {
+            "model": ep["model"], "messages": [m.model_dump() for m in messages], "stream": True,
+        }
+        payload.update(kw)
+        # 默认不发 stream_options:部分兼容网关不认会 400 打断流;仅 stream_usage=true 时取 usage
+        if self._stream_usage:
+            payload.setdefault("stream_options", {"include_usage": True})
+        # last_meta 立即刷新为本次流式调用,避免读到上一次非流式的陈旧值
+        self.last_meta = {"endpoint": ep["base_url"], "model": ep["model"],
+                          "usage": {}, "streamed": True}
+        async with self._client(idx).stream("POST", "/chat/completions", json=payload) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                raise LayerError("L0", "openai-compat",
+                                 f"HTTP {resp.status_code} @ {ep['base_url']}: {body[:300]!r}")
+            async for raw in resp.aiter_lines():
+                if not raw.startswith("data:"):
+                    continue
+                data = raw[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = _json.loads(data)
+                except ValueError:
+                    continue
+                choices = chunk.get("choices") or []
+                if choices:
+                    piece = (choices[0].get("delta") or {}).get("content")
+                    if piece:
+                        yield piece
+                usage = chunk.get("usage")
+                if usage:
+                    self.last_meta["usage"] = usage
+                    if self._ledger is not None:
+                        self._ledger.record(ep["base_url"], ep["model"],
+                                            int(usage.get("prompt_tokens", 0)),
+                                            int(usage.get("completion_tokens", 0)))
 
     async def chat_tools(self, messages: list[dict], tools: list[dict], **kw: Any):
         """function-calling 一步:messages 为 OpenAI 格式 dict(含 tool/assistant.tool_calls),

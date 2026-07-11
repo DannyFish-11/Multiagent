@@ -2,6 +2,17 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.7.0 — 流式输出(M26:SSE /chat/stream)
+
+- **`POST /chat/stream`(text/event-stream)**:逐 token 流式对话。事件 `data: {type: meta|
+  token|done|error}`——先 `meta`(event_id + 命中记忆),再逐块 `token`,最后 `done`;流内
+  出错发 `error` 事件而非静默断流。
+- **真流式**在 chat 档(MemoryAgent):`OpenAICompatAdapter.chat_stream`(OpenAI 兼容
+  `stream=true` + `stream_options.include_usage`,SSE 解析增量,usage 在流末进 CostLedger;
+  流已开始不做端点 failover)。`MemoryAgent.chat_stream` 产出事件、流末同步写记忆;LLM 不支持
+  流式则回落整段一次性。tools/swarm/supervisor 档经端点整段一次性给出(仍走同一 SSE 通道)。
+- 浏览器聊天 UI 改走 `/chat/stream`,逐 token 增量渲染(仍 textContent 防 XSS)。
+
 ## 0.6.0 — 中心调度 Supervisor(M25:协调者委派 worker 汇总)
 
 - **`agent.autonomy=supervisor`**:中央协调者拆解任务、委派 worker、汇总结果(与 M24 swarm

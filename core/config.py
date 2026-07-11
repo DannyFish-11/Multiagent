@@ -41,6 +41,9 @@ class LLMRoleSettings(LLMEndpoint):
     max_retries: int = 3          # 单端点指数退避重试上限
     retry_backoff_s: float = 0.5  # 退避基数(测试可置 0)
     timeout_s: float = 120.0
+    # M26 流式:是否请求 stream_options.include_usage(供成本记账)。默认关——部分兼容
+    # 网关不认此字段会 400 打断整条流;仅在确认供应商支持时开启。
+    stream_usage: bool = False
 
 
 class LLMSettings(BaseModel):

@@ -1,5 +1,5 @@
 # memory-agent 任务入口(BUILD_SPEC §1)
-.PHONY: install setup quickstart chat plugins up up-gpu down run-embed run-api run-mcp test lint demo \
+.PHONY: install setup quickstart chat plugins doctor up up-gpu down run-embed run-api run-mcp test lint demo \
         verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 verify fixtures
 
 install:
@@ -8,6 +8,10 @@ install:
 # M21:列出所有已注册插件(内置 + 第三方 entry_points 发现)
 plugins:
 	uv run python scripts/list_plugins.py
+
+# 启动前体检:配置/依赖/目录一次看清(有 ❌ 退出非零)
+doctor:
+	uv run memory-agent doctor
 
 # 首次运行向导:交互式生成 .env(选 LLM/嵌入/预算,密钥只落 .env)
 setup:

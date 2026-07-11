@@ -122,6 +122,20 @@ def create_app(
                 status = "degraded"
         return HealthReport(status=status, layers=layers)
 
+    @app.get("/config")
+    async def show_config():
+        """当前生效配置(密钥自动脱敏);排障用,不泄露 key。"""
+        from core.cli import _redact
+
+        return _redact(cfg.model_dump())
+
+    @app.get("/plugins")
+    async def show_plugins():
+        """列出所有已注册插件(内置 + 第三方 entry_points 发现)。"""
+        from core.plugins import REGISTRY
+
+        return REGISTRY.snapshot()
+
     @app.post("/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest):
         image = None

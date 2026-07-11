@@ -13,6 +13,8 @@
 ## 快速开始:三条路径
 
 > **最省事**:`make quickstart` —— 一条命令跑首次运行向导(交互式选 LLM/嵌入/预算、自动写 `.env`)、起 Docker 全栈、等健康检查通过;之后 `make chat` 直接对话。详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。下面是手动三条路径。
+>
+> **统一命令**:装好后有一个 `memory-agent` 命令走完全流程 —— `memory-agent doctor`(启动前体检:配置/依赖/目录一次看清,有问题给修复提示)、`setup`(向导)、`run`、`chat`、`config`(脱敏)、`plugins`、`demo`。生产部署照 [docs/DEPLOY.md](docs/DEPLOY.md)(含备份/预算/守护清单)。
 
 按你手头的资源三选一。**路径 A 零门槛**,路径 B 只需一把 key,路径 C 是完整生产形态。
 

@@ -31,8 +31,8 @@ class ScriptedToolLLM:
         self._i = 0
         self.calls_seen = []
 
-    async def chat_tools(self, messages, tools):
-        self.calls_seen.append((messages, tools))
+    async def chat_tools(self, messages, tools, **kw):
+        self.calls_seen.append((messages, tools, kw))
         turn = self._turns[min(self._i, len(self._turns) - 1)]
         self._i += 1
         return turn

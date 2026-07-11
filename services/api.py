@@ -79,9 +79,16 @@ def create_app(
         app.state.audit = AuditLog(cfg.approval.audit_path)
         app.state.approvals = ApprovalQueue(
             cfg.approval, app.state.audit, Notifier(cfg.approval))
-        # M22 装配 agent:autonomy=tools 且 LLM 支持 function-calling → ToolAgent(会用工具),
-        # 否则回落记忆增强问答 MemoryAgent(向后兼容)
-        if cfg.agent.autonomy == "tools" and hasattr(_llm, "chat_tools"):
+        # 装配 agent(需 function-calling 模型):autonomy=swarm → 去中心化多成员(M24);
+        # autonomy=tools → 会用工具的单 agent(M22);否则/不满足 → 回落记忆问答(向后兼容)。
+        _fc = hasattr(_llm, "chat_tools")
+        if cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
+            from adapters.web import WebAdapter
+            from core.swarm import build_swarm
+
+            app.state.agent = build_swarm(
+                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals)
+        elif cfg.agent.autonomy == "tools" and _fc:
             from adapters.web import WebAdapter
             from core.tool_agent import ToolAgent
             from core.tools import build_toolbox
@@ -154,6 +161,7 @@ def create_app(
         """列出所有已注册插件(内置 + 第三方 entry_points 发现)。"""
         import adapters.cloud  # noqa: F401 - 触发 cloud_provider 内置注册
         import core.experiment  # noqa: F401 - 触发 task_source 内置注册
+        import core.harness  # noqa: F401 - 触发 profile 内置注册
         from core.plugins import REGISTRY
 
         return REGISTRY.snapshot()

@@ -1,6 +1,6 @@
 [project]
 name = "memory-agent"
-version = "0.3.0"
+version = "0.5.0"
 description = "Multimodal memory agent: Gemma 4 (vLLM) + jina-embeddings-v5-omni + Omni-SimpleMem/Qdrant + Omnigent"
 readme = "README.md"
 requires-python = ">=3.12"

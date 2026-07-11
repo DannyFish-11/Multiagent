@@ -135,8 +135,28 @@ class AgentSettings(BaseModel):
     # M22:tools = 自主工具循环(默认开;需 function-calling 模型 api/litellm,否则自动
     # 回落记忆问答);chat = 纯记忆增强问答。默认工具集只含安全的 recall/remember
     # (自动放行);危险工具(上网/付款等)需显式加入 tools 且按 config 审批分级。
-    autonomy: str = "tools"
+    # M22 tools;M24 swarm = 去中心化多成员手递手(需配 swarm.members;非 fc 模型回落)
+    autonomy: str = "tools"      # chat | tools | swarm
     tools: list[str] = Field(default_factory=lambda: ["recall", "remember"])
+    # M23 Harness Profile:按模型打包的脚手架(系统提示/采样/工具循环参数),让开源模型
+    # 发挥真实水平。auto = 按 chat 模型名自动选内置 profile(匹配不到回落 default,零侵入);
+    # 也可填具体名(glm/deepseek/kimi/qwen/gemma/…,make plugins 看 profile 类)或 none。
+    profile: str = "auto"
+
+
+class SwarmMemberSettings(BaseModel):
+    """swarm 一个成员 = 名字 + 人设 prompt + 私有工具 + 可转交给谁。"""
+    name: str
+    prompt: str = ""
+    tools: list[str] = Field(default_factory=list)     # 该成员自己的工具名(空=无)
+    handoffs: list[str] = Field(default_factory=list)  # 可转交的其他成员名(空=终点)
+
+
+class SwarmSettings(BaseModel):
+    """M24 去中心化多 agent:成员之间手递手传任务,无中央调度器(蜂群式)。
+    默认空 → autonomy=swarm 未配成员时安全回落。"""
+    entry: str = ""                                    # 起始 active 成员名
+    members: list[SwarmMemberSettings] = Field(default_factory=list)
 
 
 class IdentitySettings(BaseModel):
@@ -317,6 +337,7 @@ class AppConfig(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     services: ServiceSettings = Field(default_factory=ServiceSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    swarm: SwarmSettings = Field(default_factory=SwarmSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     a2a: A2ASettings = Field(default_factory=A2ASettings)

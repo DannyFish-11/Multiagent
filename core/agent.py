@@ -24,10 +24,17 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryAgent:
-    def __init__(self, llm: "LLMClient", memory: "MemoryStore", config: AppConfig) -> None:
+    def __init__(self, llm: "LLMClient", memory: "MemoryStore", config: AppConfig,
+                 profile=None) -> None:
         self._llm = llm
         self._memory = memory
         self._config = config
+        # M23 Harness Profile:按模型的脚手架(此处仅用 system_prompt 指引部分)
+        if profile is None:
+            from core.harness import select_profile
+
+            profile = select_profile(config)
+        self._profile = profile
         self._pending: set[asyncio.Task] = set()
         self.last_write_error = False  # 后台写失败的可观测标记(healthz/测试用)
         # M8 埋点:检索事件日志(可选注入;None 时不记录)
@@ -37,8 +44,12 @@ class MemoryAgent:
         self._retrieval_logger = logger_
 
     def _build_system_prompt(self, hits: list[MemoryHit]) -> str:
+        # profile 指引叠加在基础提示与记忆块**之间**:记忆块保持在末尾(EchoLLM 依赖
+        # "## 相关记忆"之后即记忆内容来复述)。
+        scaffold = f"{self._profile.system_prompt}\n\n" if self._profile.system_prompt else ""
         return (
             f"{self._config.agent.system_prompt}\n\n"
+            f"{scaffold}"
             f"## 相关记忆\n{memory_block(hits)}"
         )
 

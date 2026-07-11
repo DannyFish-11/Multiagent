@@ -44,9 +44,46 @@ def _load_registry():
     import adapters.llm  # noqa: F401
     import core.experiment  # noqa: F401
     import core.factory  # noqa: F401
+    import core.harness  # noqa: F401 - 触发 profile 内置注册
     from core.plugins import REGISTRY
 
     return REGISTRY
+
+
+def _check_swarm(config, mode: str) -> list[Check]:
+    """swarm 成员配置预检:非空/名字唯一/entry 与 handoffs 均指向已定义成员。"""
+    out: list[Check] = []
+    members = config.swarm.members
+    if not members:
+        out.append(Check("fail", "autonomy=swarm 但 swarm.members 为空",
+                         "无成员可流转,将回落记忆问答",
+                         "配 swarm.members(见 docs/PLUGINS.md 的 swarm 段)或改 autonomy"))
+        return out
+    if mode not in ("api", "litellm"):
+        out.append(Check("warn", f"autonomy=swarm 但 LLM={mode} 不支持 function-calling",
+                         "echo/local 无工具调用能力,将回落记忆问答", "用 llm.mode=api 或 litellm"))
+    names = [m.name for m in members]
+    nameset = set(names)
+    if len(names) != len(nameset):
+        out.append(Check("fail", f"swarm 成员名重复:{names}", "", "成员 name 须唯一"))
+    entry = config.swarm.entry or names[0]
+    if entry not in nameset:
+        out.append(Check("fail", f"swarm.entry '{entry}' 不在成员中", f"成员:{names}",
+                         "把 entry 设为某个成员名"))
+    dangling = {h for m in members for h in m.handoffs if h not in nameset}
+    if dangling:
+        out.append(Check("fail", f"swarm handoffs 指向未定义成员:{sorted(dangling)}",
+                         "", "补上这些成员,或修正 handoffs"))
+    selfloop = [m.name for m in members if m.name in m.handoffs]
+    if selfloop:
+        out.append(Check("fail", f"swarm 成员转交给自身:{selfloop}", "", "移除自指的 handoff"))
+    if not any(m.handoffs for m in members):
+        out.append(Check("warn", "swarm 无任何 handoff", "成员间不流转,等同单 agent",
+                         "给至少一个成员配 handoffs"))
+    if not [c for c in out if c.level == "fail"]:
+        out.append(Check("ok", f"autonomy=swarm({len(members)} 成员,entry={entry})",
+                         " → ".join(names)))
+    return out
 
 
 def run_doctor(config) -> list[Check]:
@@ -96,6 +133,29 @@ def run_doctor(config) -> list[Check]:
             checks.append(Check("warn", f"autonomy=tools 但 LLM={mode} 不支持 function-calling",
                                 "echo/local 无工具调用能力,将回落记忆问答",
                                 "用 llm.mode=api 或 litellm"))
+
+    # ---- 去中心化 swarm(M24) ----
+    if config.agent.autonomy == "swarm":
+        checks.extend(_check_swarm(config, mode))
+
+    # ---- Harness Profile(M23:按模型脚手架) ----
+    from core.errors import LayerError
+    from core.harness import effective_chat_model, select_profile
+
+    want = config.agent.profile
+    try:
+        prof = select_profile(config)
+        if want in ("auto", ""):
+            model = effective_chat_model(config) or "(无模型名)"
+            picked = prof.name if prof.name != "default" else "default(无专属脚手架)"
+            checks.append(Check("ok", f"Harness profile=auto → {picked}",
+                                f"按 chat 模型 '{model}' 匹配"))
+        else:
+            checks.append(Check("ok", f"Harness profile={prof.name}"))
+    except LayerError as exc:
+        checks.append(Check("fail", f"Harness profile '{want}' 未注册",
+                            str(exc).split(";")[0],
+                            "改 agent.profile 为 auto/none 或已注册名(make plugins 看 profile 类)"))
 
     # ---- 嵌入 ----
     backend = config.embedder.backend

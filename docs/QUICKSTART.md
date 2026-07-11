@@ -13,6 +13,8 @@ make quickstart      # = 环境检查 → 首次运行向导 → docker compose 
 make chat            # 起来后,在终端里直接和它对话
 ```
 
+起好后**浏览器打开 http://localhost:8002 就能直接聊**(自带聊天界面,显示命中的记忆),或用 `make chat` 在终端聊。
+
 `quickstart` 会:
 1. 检查 `docker` / `docker compose` 是否就绪;
 2. 若无 `.env`,跑**首次运行向导**(`scripts/setup.py`)——问你 LLM 供应商(DeepSeek/OpenAI/…)、key、嵌入方式、日预算,把 `.env` 写好(密钥只落 `.env`,已 gitignore);

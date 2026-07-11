@@ -95,3 +95,20 @@ def test_config_and_plugins_routes_redacted():
         assert conf.json()["llm"]["chat"]["api_key"] == "***"
         plugins = c.get("/plugins").json()
         assert "echo" in plugins["llm"] and "fake" in plugins["embedder"]
+
+
+def test_web_ui_served_at_root():
+    """内置浏览器聊天界面挂在首页(打开即用,无需命令行)。"""
+    from fastapi.testclient import TestClient
+
+    from services.api import create_app
+
+    cfg = load_config(llm={"mode": "echo"}, embedder={"backend": "fake"},
+                      vectordb={"mode": "memory"})
+    with TestClient(create_app(cfg)) as c:
+        r = c.get("/")
+        assert r.status_code == 200
+        assert "text/html" in r.headers.get("content-type", "")
+        assert r.text.startswith("<!doctype html>") and "记忆助手" in r.text
+        assert "./chat" in r.text and "./healthz" in r.text   # 前端打的是相对路由
+        assert c.get("/ui").status_code == 200

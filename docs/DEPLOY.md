@@ -26,6 +26,7 @@ make run-api                 # L3 API :8002;/healthz 分层报告依赖
 make quickstart
 ```
 
+起好后**浏览器打开 http://localhost:8002 即可对话**(自带聊天界面);或 `make chat` 终端聊。
 自检:`curl localhost:8002/healthz`(三层 ok)· `curl localhost:8002/config`(脱敏配置)· `curl localhost:8002/plugins`(已装插件)。
 
 ## 3. 稳定运行(生产)

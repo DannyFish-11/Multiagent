@@ -10,7 +10,7 @@ import contextlib
 import logging
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from adapters.a2a import build_signed_card
 from adapters.embedder import RemoteEmbedderAdapter, build_embedder
@@ -121,6 +121,14 @@ def create_app(
                 layers[name] = str(exc)
                 status = "degraded"
         return HealthReport(status=status, layers=layers)
+
+    @app.get("/", response_class=HTMLResponse)
+    @app.get("/ui", response_class=HTMLResponse)
+    async def web_ui():
+        """内置浏览器聊天界面(打开首页即对话,无需命令行)。"""
+        from services.webui import CHAT_HTML
+
+        return CHAT_HTML
 
     @app.get("/config")
     async def show_config():

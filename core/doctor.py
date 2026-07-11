@@ -44,6 +44,7 @@ def _load_registry():
     import adapters.llm  # noqa: F401
     import core.experiment  # noqa: F401
     import core.factory  # noqa: F401
+    import core.harness  # noqa: F401 - 触发 profile 内置注册
     from core.plugins import REGISTRY
 
     return REGISTRY
@@ -96,6 +97,25 @@ def run_doctor(config) -> list[Check]:
             checks.append(Check("warn", f"autonomy=tools 但 LLM={mode} 不支持 function-calling",
                                 "echo/local 无工具调用能力,将回落记忆问答",
                                 "用 llm.mode=api 或 litellm"))
+
+    # ---- Harness Profile(M23:按模型脚手架) ----
+    from core.errors import LayerError
+    from core.harness import effective_chat_model, select_profile
+
+    want = config.agent.profile
+    try:
+        prof = select_profile(config)
+        if want in ("auto", ""):
+            model = effective_chat_model(config) or "(无模型名)"
+            picked = prof.name if prof.name != "default" else "default(无专属脚手架)"
+            checks.append(Check("ok", f"Harness profile=auto → {picked}",
+                                f"按 chat 模型 '{model}' 匹配"))
+        else:
+            checks.append(Check("ok", f"Harness profile={prof.name}"))
+    except LayerError as exc:
+        checks.append(Check("fail", f"Harness profile '{want}' 未注册",
+                            str(exc).split(";")[0],
+                            "改 agent.profile 为 auto/none 或已注册名(make plugins 看 profile 类)"))
 
     # ---- 嵌入 ----
     backend = config.embedder.backend

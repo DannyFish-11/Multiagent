@@ -137,6 +137,10 @@ class AgentSettings(BaseModel):
     # (自动放行);危险工具(上网/付款等)需显式加入 tools 且按 config 审批分级。
     autonomy: str = "tools"
     tools: list[str] = Field(default_factory=lambda: ["recall", "remember"])
+    # M23 Harness Profile:按模型打包的脚手架(系统提示/采样/工具循环参数),让开源模型
+    # 发挥真实水平。auto = 按 chat 模型名自动选内置 profile(匹配不到回落 default,零侵入);
+    # 也可填具体名(glm/deepseek/kimi/qwen/gemma/…,make plugins 看 profile 类)或 none。
+    profile: str = "auto"
 
 
 class IdentitySettings(BaseModel):

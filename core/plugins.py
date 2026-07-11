@@ -5,7 +5,7 @@
 树外 pip 装个包即被自动发现,无需改本仓库。
 
 扩展点(kind):
-  llm / embedder / memory / cloud_provider / task_source / tool
+  llm / embedder / memory / cloud_provider / task_source / tool / profile
 
 两种注册方式:
 1. 树内:``@register("llm", "myname")`` 装饰工厂函数/类(import 该模块即登记)。
@@ -22,6 +22,7 @@
   cloud_provider(config) -> CloudProvider
   task_source(spec, seed) -> 具 .stream()->list[Task] 的对象
   tool(config) -> 工具对象(经审批策略引擎治理)
+  profile() -> HarnessProfile(按模型的脚手架:系统提示/采样/工具循环参数,见 core.harness)
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from core.errors import LayerError
 logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "memory_agent.plugins"
-KINDS = ("llm", "embedder", "memory", "cloud_provider", "task_source", "tool")
+KINDS = ("llm", "embedder", "memory", "cloud_provider", "task_source", "tool", "profile")
 
 
 class PluginRegistry:

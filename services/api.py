@@ -154,6 +154,7 @@ def create_app(
         """列出所有已注册插件(内置 + 第三方 entry_points 发现)。"""
         import adapters.cloud  # noqa: F401 - 触发 cloud_provider 内置注册
         import core.experiment  # noqa: F401 - 触发 task_source 内置注册
+        import core.harness  # noqa: F401 - 触发 profile 内置注册
         from core.plugins import REGISTRY
 
         return REGISTRY.snapshot()

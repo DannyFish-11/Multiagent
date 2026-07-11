@@ -2,6 +2,19 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.4.0 — Harness Profiles(M23:让开源模型发挥真实水平)
+
+- **Harness Profile**:按模型打包的"脚手架"(系统提示 + 采样参数 + 工具循环处理),做成
+  一等插件(`profile` 类,走同一套注册表:树内 `@register("profile", ...)`,树外 `profile:xxx`
+  entry point)。选 `agent.profile`:`auto`(默认,按 chat 模型名自动匹配;**匹配不到回落
+  `default` 零侵入**,闭源旗舰不受影响)/ 具体名 / `none`。内置 gemma/glm/deepseek/kimi/qwen。
+- 作用点(纯加法,不改协议签名):`system_prompt` 指引对 MemoryAgent 与 ToolAgent 都叠加;
+  采样参数经 `**kw` 透传给 `chat_tools`;`tool_result_max_chars` 在工具结果回灌前截断
+  (文章"只回传有用结果"的轻量落地——省 token、防长结果塞爆上下文);`max_tools_per_turn`/
+  `max_steps` 可覆盖工具循环上限。
+- `doctor` 增 Harness profile 顾问项(auto 显示实际选中项;未注册名报错列出可用);
+  `make plugins` / `/plugins` 列出 profile 类。写 profile 见 docs/PLUGINS.md。
+
 ## 0.3.0 — 自主工具循环(M22)
 
 - `agent.autonomy=tools`(**默认开**):会用工具的 agent 循环——LLM 自己决定调用工具(内置

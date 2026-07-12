@@ -16,6 +16,16 @@
   从 /tmp 运行,healthz 全绿、`/chat/stream` 正常。
 - `build` 可选 extra(pyinstaller);docs/RUN.md 三种上手方式 + README 置顶指引;版本 0.12.0。
 
+**全项目排查(3 个并行子 agent 扫全库)→ 修 3 处默认档静默退化 + 1 处文档不符:**
+- M8:`autonomy=tools`(默认)/swarm/supervisor 此前**不记检索事件**(`set_retrieval_logger`
+  只在 MemoryAgent 上),导致 `/feedback` + 代谢管线在默认档静默失效。现 ToolAgent/SwarmAgent
+  也记录 RetrievalEvent。
+- M29:`TracedLLM` 此前只埋点 `chat()`,默认工具循环走的 `chat_tools()`、流式走的 `chat_stream()`
+  没 span,执行树缺"生成"节点。现两者都埋点。
+- `memory-agent start` 补 `--host/--port`(docs/RUN.md 宣传过但子命令没受理);删一处死代码。
+- 安全不变量(审批 deny 优先 / 注入防御 / 第三方工具不可自升级 / provenance 剥除 / 令牌预算原子性
+  / 无密钥入库 / 启动器默认 127.0.0.1)与一致性(版本/文档/config/红线/七类插件/各档测试)全部复核通过。
+
 ## 0.11.0 — 作用域授权令牌 + 来源可信闸(M30)
 
 借鉴 B2B 多 agent 白皮书里我们**尚缺**的两块治理(身份/审批/审计/支付笼子等已有):

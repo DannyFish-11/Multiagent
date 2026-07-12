@@ -158,6 +158,48 @@ class TracedLLM(_TracedBase):
                                    int(usage.get("completion_tokens", 0)))
             return out
 
+    async def chat_tools(self, messages, tools, **kw):
+        """M22 工具循环的 LLM 调用也埋点(默认 autonomy=tools 走这条,不能漏)。"""
+        with self._tracer.start_as_current_span("llm.chat_tools") as span:
+            _apply_tags(span, self._cfg)
+            model = getattr(self._inner, "model", "") or ""
+            span.set_attribute("gen_ai.system", "openai")
+            span.set_attribute("gen_ai.operation.name", "chat_tools")
+            if model:
+                span.set_attribute("gen_ai.request.model", str(model))
+            span.set_attribute("gen_ai.request.tools_count", len(tools or []))
+            t0 = time.perf_counter()
+            try:
+                turn = await self._inner.chat_tools(messages, tools, **kw)
+            except Exception as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.message", str(exc)[:512])
+                raise
+            span.set_attribute("latency_ms", round((time.perf_counter() - t0) * 1000, 3))
+            span.set_attribute("gen_ai.tool_calls_count", len(getattr(turn, "tool_calls", []) or []))
+            usage = (getattr(self._inner, "last_meta", {}) or {}).get("usage") or {}
+            if usage:
+                span.set_attribute("gen_ai.usage.input_tokens", int(usage.get("prompt_tokens", 0)))
+                span.set_attribute("gen_ai.usage.output_tokens",
+                                   int(usage.get("completion_tokens", 0)))
+            return turn
+
+    async def chat_stream(self, messages, **kw):
+        """流式 LLM 调用埋点(autonomy=chat 的真流式走这条)。span 覆盖整段流。"""
+        with self._tracer.start_as_current_span("llm.chat_stream") as span:
+            _apply_tags(span, self._cfg)
+            model = getattr(self._inner, "model", "") or ""
+            span.set_attribute("gen_ai.operation.name", "chat_stream")
+            if model:
+                span.set_attribute("gen_ai.request.model", str(model))
+            t0 = time.perf_counter()
+            n = 0
+            async for piece in self._inner.chat_stream(messages, **kw):
+                n += len(piece or "")
+                yield piece
+            span.set_attribute("latency_ms", round((time.perf_counter() - t0) * 1000, 3))
+            span.set_attribute("gen_ai.completion.length", n)
+
 
 class TracedEmbedder(_TracedBase):
     @property

@@ -40,6 +40,10 @@ class ToolAgent:
             profile = select_profile(config)
         self._profile = profile
         self._max_tools = profile.max_tools_per_turn or _MAX_TOOLS_PER_TURN
+        self._retrieval_logger = None      # M8 埋点(可选注入;None 时不记录)
+
+    def set_retrieval_logger(self, logger_) -> None:
+        self._retrieval_logger = logger_
 
     def _system_prompt(self, hits) -> str:
         scaffold = f"{self._profile.system_prompt}\n\n" if self._profile.system_prompt else ""
@@ -91,6 +95,11 @@ class ToolAgent:
         hits = await self._memory.search(MultimodalInput.text(message),
                                          k=self._config.agent.top_k)
         event_id = uuid.uuid4().hex
+        if self._retrieval_logger is not None:      # M8:记录检索事件(供 /feedback + 代谢)
+            from core.metabolism import RetrievalEvent
+
+            self._retrieval_logger.log(RetrievalEvent(
+                query=message, hit_ids=[h.id for h in hits], event_id=event_id))
         yield {"type": "meta", "event_id": event_id, "_hits": hits}
         messages: list[dict] = [
             {"role": "system", "content": self._system_prompt(hits)},

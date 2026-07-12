@@ -72,5 +72,7 @@ def test_force_demo_overrides_configured(monkeypatch, tmp_path):
 def test_cli_has_start_subcommand():
     from core.cli import build_parser
 
-    args = build_parser().parse_args(["start", "--no-browser", "--demo"])
+    args = build_parser().parse_args(
+        ["start", "--no-browser", "--demo", "--host", "0.0.0.0", "--port", "9000"])
     assert args.cmd == "start" and args.no_browser is True and args.demo is True
+    assert args.host == "0.0.0.0" and args.port == 9000     # RUN.md 里宣传的 --host/--port 真受理

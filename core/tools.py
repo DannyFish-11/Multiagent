@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from core.schemas import MultimodalInput
 
@@ -164,9 +164,3 @@ def build_toolbox(config, memory, web=None, names=None) -> list[Tool]:
             except Exception:
                 pass
     return tools
-
-
-def _first_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    return str(content or "")

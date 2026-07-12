@@ -85,6 +85,10 @@ def cmd_start(args) -> int:
         argv.append("--demo")
     if getattr(args, "no_browser", False):
         argv.append("--no-browser")
+    if getattr(args, "host", None):
+        argv += ["--host", args.host]
+    if getattr(args, "port", None):
+        argv += ["--port", str(args.port)]
     return launch_main(argv)
 
 
@@ -131,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("start", help="一键运行:起服务并自动打开浏览器(零配置即 demo 档)")
     st.add_argument("--demo", action="store_true", help="强制 demo 档(echo+fake,零 key)")
     st.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    st.add_argument("--host", default=None, help="监听地址(默认 127.0.0.1,仅本机)")
+    st.add_argument("--port", type=int, default=None, help="端口(默认取 config.services.api_port)")
     sub.add_parser("chat", help="终端对话")
     sp = sub.add_parser("setup", help="首次运行向导:写 .env")
     sp.add_argument("--demo", action="store_true", help="非交互写零 key demo 档")

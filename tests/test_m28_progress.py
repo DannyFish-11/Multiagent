@@ -149,6 +149,23 @@ def test_endpoint_streams_step_events_for_tools():
         assert evs[-1]["type"] == "done"
 
 
+async def test_toolagent_logs_retrieval_event():
+    """M8 回归:autonomy=tools(默认)也要记检索事件(供 /feedback + 代谢),不能只有 chat 档记。"""
+    logged = []
+
+    class Logger:
+        def log(self, ev):
+            logged.append(ev)
+
+    agent = ToolAgent(ScriptedToolLLM([AssistantTurn(content="hi")]), FakeMemory(),
+                      load_config(), tools=[])
+    agent.set_retrieval_logger(Logger())
+    resp = await agent.run("我的猫叫什么")
+    assert len(logged) == 1
+    assert logged[0].query == "我的猫叫什么" and logged[0].event_id == resp.event_id
+    assert logged[0].hit_ids == ["m1"]                 # 命中记忆 id 记入事件
+
+
 def test_unused_tool_import_guard():
     """占位:确保 Tool 导入被使用(避免 F401);同时校验 spec 不含内部字段。"""
     t = Tool("x", "d", {"type": "object", "properties": {}}, None)

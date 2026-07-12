@@ -7,6 +7,7 @@ logs/
 omni_memory_data/
 *.egg-info/
 dist/
+build/
 .upstream/
 .env
 .env.observability

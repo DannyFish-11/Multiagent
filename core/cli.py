@@ -76,6 +76,22 @@ def cmd_run(_args) -> int:
     return 0  # 不会到达
 
 
+def cmd_start(args) -> int:
+    # M31 一键运行:零配置也能跑 + 自动开浏览器(双击启动器 / 独立可执行都走这里)
+    from core.launch import main as launch_main
+
+    argv = []
+    if getattr(args, "demo", False):
+        argv.append("--demo")
+    if getattr(args, "no_browser", False):
+        argv.append("--no-browser")
+    if getattr(args, "host", None):
+        argv += ["--host", args.host]
+    if getattr(args, "port", None):
+        argv += ["--port", str(args.port)]
+    return launch_main(argv)
+
+
 def cmd_chat(_args) -> int:
     return _runpy(SCRIPTS / "chat.py")
 
@@ -116,6 +132,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("config", help="打印生效配置(密钥脱敏)")
     sub.add_parser("plugins", help="列出所有可用插件")
     sub.add_parser("run", help="起 L3 API(:8002)")
+    st = sub.add_parser("start", help="一键运行:起服务并自动打开浏览器(零配置即 demo 档)")
+    st.add_argument("--demo", action="store_true", help="强制 demo 档(echo+fake,零 key)")
+    st.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    st.add_argument("--host", default=None, help="监听地址(默认 127.0.0.1,仅本机)")
+    st.add_argument("--port", type=int, default=None, help="端口(默认取 config.services.api_port)")
     sub.add_parser("chat", help="终端对话")
     sp = sub.add_parser("setup", help="首次运行向导:写 .env")
     sp.add_argument("--demo", action="store_true", help="非交互写零 key demo 档")
@@ -125,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 HANDLERS = {
     "doctor": cmd_doctor, "config": cmd_config, "plugins": cmd_plugins,
-    "run": cmd_run, "chat": cmd_chat, "setup": cmd_setup, "demo": cmd_demo,
+    "run": cmd_run, "start": cmd_start, "chat": cmd_chat, "setup": cmd_setup, "demo": cmd_demo,
 }
 
 

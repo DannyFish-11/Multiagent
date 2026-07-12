@@ -108,6 +108,31 @@ async def test_chat_stream_records_steps_as_span_events_and_passes_through():
 
 # ---------------------------------------------------------------- 开关
 
+async def test_tracedllm_traces_chat_tools_and_stream():
+    """M29 回归:默认 autonomy=tools 走 chat_tools、chat 档流式走 chat_stream——两者都要有
+    LLM span,否则执行树缺"生成"节点(此前只 chat() 埋点)。"""
+    from adapters.observability import TracedLLM
+    from core.tools import AssistantTurn
+
+    class LLM:
+        model = "m"
+
+        async def chat_tools(self, messages, tools, **kw):
+            return AssistantTurn(tool_calls=[])
+
+        async def chat_stream(self, messages, **kw):
+            for p in ("甲", "乙"):
+                yield p
+
+    tr = FakeTracer()
+    t = TracedLLM(LLM(), tr, load_config())
+    await t.chat_tools([], [{"type": "function"}])
+    assert any(s.name == "llm.chat_tools" for s in tr.spans)
+    pieces = [p async for p in t.chat_stream([])]
+    assert pieces == ["甲", "乙"]                       # 流式内容透传不变
+    assert any(s.name == "llm.chat_stream" for s in tr.spans)
+
+
 def test_instrument_agent_noop_when_disabled():
     inner = FakeAgent()
     cfg = load_config()                                # observability.enabled 默认 false

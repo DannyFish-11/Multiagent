@@ -2,6 +2,30 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.12.0 — 一键运行(M31:双击即用,不用 clone/命令行)
+
+让"跑起来"从"clone + 装环境 + 敲命令"变成**双击就用**:
+
+- **`core/launch.py` + `memory-agent start`**:零配置也能跑——没 `.env`/没设 `MEMORY_AGENT_LLM__*`
+  时自动回落 **demo 档**(echo+fake+内存库,零 key/GPU),启动后**自动打开浏览器**到聊天页;
+  已配置则尊重用户配置、不覆盖;无 GUI 环境静默跳过开浏览器。
+- **双击启动器**:`run.bat`(Windows)/ `run.sh`(Linux/mac)——首次自动装 `uv`+依赖,起服务开浏览器。
+- **独立可执行文件(不用 clone/Python)**:`packaging/memory-agent.spec`(PyInstaller 单文件,排除
+  torch 等重依赖)+ `.github/workflows/release.yml` 为 Windows/Linux 自动构建、跑 `/healthz` 自检、
+  挂到 **Releases**。用户下载双击 → 自动开浏览器聊天页。**已在 Linux 实测**:66MB 单文件,脱离仓库
+  从 /tmp 运行,healthz 全绿、`/chat/stream` 正常。
+- `build` 可选 extra(pyinstaller);docs/RUN.md 三种上手方式 + README 置顶指引;版本 0.12.0。
+
+**全项目排查(3 个并行子 agent 扫全库)→ 修 3 处默认档静默退化 + 1 处文档不符:**
+- M8:`autonomy=tools`(默认)/swarm/supervisor 此前**不记检索事件**(`set_retrieval_logger`
+  只在 MemoryAgent 上),导致 `/feedback` + 代谢管线在默认档静默失效。现 ToolAgent/SwarmAgent
+  也记录 RetrievalEvent。
+- M29:`TracedLLM` 此前只埋点 `chat()`,默认工具循环走的 `chat_tools()`、流式走的 `chat_stream()`
+  没 span,执行树缺"生成"节点。现两者都埋点。
+- `memory-agent start` 补 `--host/--port`(docs/RUN.md 宣传过但子命令没受理);删一处死代码。
+- 安全不变量(审批 deny 优先 / 注入防御 / 第三方工具不可自升级 / provenance 剥除 / 令牌预算原子性
+  / 无密钥入库 / 启动器默认 127.0.0.1)与一致性(版本/文档/config/红线/七类插件/各档测试)全部复核通过。
+
 ## 0.11.0 — 作用域授权令牌 + 来源可信闸(M30)
 
 借鉴 B2B 多 agent 白皮书里我们**尚缺**的两块治理(身份/审批/审计/支付笼子等已有):

@@ -52,6 +52,10 @@ class SwarmAgent:
             profile = select_profile(config)
         self._profile = profile
         self._max_tools = profile.max_tools_per_turn or _MAX_TOOLS_PER_TURN
+        self._retrieval_logger = None      # M8 埋点(可选注入)
+
+    def set_retrieval_logger(self, logger_) -> None:
+        self._retrieval_logger = logger_
 
     # ---- 提示装配(每个成员各自人设 + 统一安全须知 + 共享记忆) ----
 
@@ -113,6 +117,11 @@ class SwarmAgent:
         hits = await self._memory.search(MultimodalInput.text(message),
                                          k=self._config.agent.top_k)
         event_id = uuid.uuid4().hex
+        if self._retrieval_logger is not None:      # M8:记录检索事件(供 /feedback + 代谢)
+            from core.metabolism import RetrievalEvent
+
+            self._retrieval_logger.log(RetrievalEvent(
+                query=message, hit_ids=[h.id for h in hits], event_id=event_id))
         yield {"type": "meta", "event_id": event_id, "_hits": hits}
         # 无常驻 system:每轮按当前 active 成员现算 system,拼在共享转录之前
         messages: list[dict] = [{"role": "user", "content": message}]

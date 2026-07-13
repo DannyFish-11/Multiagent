@@ -239,6 +239,18 @@ class ApprovalSettings(BaseModel):
         default_factory=lambda: ["erp_verified", "verified", "system", "user"])
 
 
+class InjectionSettings(BaseModel):
+    """M33 提示词注入检测:主动扫描进入模型的不可信内容(网页正文等)里的注入特征。
+
+    启发式确定性检测默认开、零成本;LLM 二次分类默认关。on_detect 只对 malicious 生效
+    (suspicious 一律仅加告警横幅,不拦,避免误伤);block 是人类显式选择的硬拦策略。"""
+    enabled: bool = True
+    llm_classifier: bool = False        # LLM 二次分类(启发式判 clean 时兜底):需 LLM、有成本
+    on_detect: Literal["annotate", "redact", "block"] = "annotate"   # 对 malicious 的处置
+    suspicious_score: int = 3           # 判 suspicious 的权重阈值
+    malicious_score: int = 6            # 判 malicious 的权重阈值
+
+
 class SimulationSettings(BaseModel):
     """M32 Gecko-lite 预执行模拟:危险动作真实执行前先做参数校验 + 效果预览。
 
@@ -392,6 +404,7 @@ class AppConfig(BaseSettings):
     concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
     approval: ApprovalSettings = Field(default_factory=ApprovalSettings)
     simulation: SimulationSettings = Field(default_factory=SimulationSettings)
+    injection: InjectionSettings = Field(default_factory=InjectionSettings)
     delegation: DelegationSettings = Field(default_factory=DelegationSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     gmail_poll: GmailPollSettings = Field(default_factory=GmailPollSettings)

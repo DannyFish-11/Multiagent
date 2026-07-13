@@ -49,9 +49,11 @@ def wrap_untrusted(text: str, source_url: str) -> str:
 
 class WebAdapter:
     def __init__(self, settings: WebSettings,
-                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 scanner=None) -> None:
         self._settings = settings
         self._transport = transport
+        self._scanner = scanner        # M33 注入扫描器(可选);None → 不扫描(向后兼容)
 
     async def search(self, query: str, k: int = 5) -> list[dict]:
         """web_search:接搜索 API(供应商由人类选定)。返回 [{title,url,snippet}]。"""
@@ -88,8 +90,15 @@ class WebAdapter:
                 raise LayerError("L10", "web-fetch", f"HTTP {resp.status_code} @ {url}")
             html = resp.text[: self._settings.fetch_max_bytes]
         title, markdown = _extract_markdown(html, url)
+        # M33:抓取正文进模型前先过注入扫描(命中按策略标注/屏蔽/拦截,malicious+block 抛错)。
+        # 扫描器 None 时行为不变。横幅/屏蔽已并入 guarded 文本,再统一裹进不可信块。
+        guarded, verdict = markdown, "clean"
+        if self._scanner is not None:
+            res = await self._scanner.guard(markdown, source=url)
+            guarded, verdict = res.text, res.detection.verdict
         return {"url": url, "title": title, "markdown": markdown,
-                "untrusted": wrap_untrusted(markdown, url)}
+                "injection_verdict": verdict,
+                "untrusted": wrap_untrusted(guarded, url)}
 
 
 def _extract_markdown(html: str, url: str) -> tuple[str, str]:

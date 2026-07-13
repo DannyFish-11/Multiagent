@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 _MAX_TOOLS_PER_TURN = 8      # 单轮工具调用批量上限(防注入/模型一次塞入海量调用)
 
 
+def _positive_or(value, default: int) -> int:
+    """profile 覆盖值须为正整数才采用;0/负数/None → 回落默认(否则 [:-1] / range(-1) 出错)。"""
+    return value if (isinstance(value, int) and not isinstance(value, bool) and value > 0) else default
+
+
 class ToolAgent:
     def __init__(self, llm, memory, config, approval=None, tools=None, profile=None,
                  persona=None, write_back=True) -> None:
@@ -39,7 +44,7 @@ class ToolAgent:
 
             profile = select_profile(config)
         self._profile = profile
-        self._max_tools = profile.max_tools_per_turn or _MAX_TOOLS_PER_TURN
+        self._max_tools = _positive_or(profile.max_tools_per_turn, _MAX_TOOLS_PER_TURN)
         self._retrieval_logger = None      # M8 埋点(可选注入;None 时不记录)
 
     def set_retrieval_logger(self, logger_) -> None:
@@ -106,7 +111,7 @@ class ToolAgent:
             {"role": "user", "content": message},
         ]
         specs = [t.spec() for t in self._tools.values()]
-        max_steps = self._profile.max_steps or self._config.loops.limit("agent_steps")
+        max_steps = _positive_or(self._profile.max_steps, self._config.loops.limit("agent_steps"))
         sampling = self._profile.sampling
         used_tools: list[str] = []
 
@@ -118,18 +123,21 @@ class ToolAgent:
                 yield {"type": "done", "event_id": event_id}
                 return
             calls = turn.tool_calls[:self._max_tools]   # 单轮批量硬上限(防一次塞爆)
+            # 规范化 tool_call id:模型可能给空/重复 id,会让下一轮转录非法(供应商 400)。
+            # 统一改成本轮确定性唯一 id(id 只用于本转录内 assistant↔tool 配对)。
+            cids = [f"c{_step}_{i}" for i in range(len(calls))]
             messages.append({
                 "role": "assistant", "content": turn.content or "",
-                "tool_calls": [{"id": c.id, "type": "function", "function": {
+                "tool_calls": [{"id": cids[i], "type": "function", "function": {
                     "name": c.name,
                     "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
-                    for c in calls]})
-            for c in calls:
+                    for i, c in enumerate(calls)]})
+            for i, c in enumerate(calls):
                 kind = "delegate" if c.name.startswith("delegate_to_") else "tool"
                 yield {"type": "step", "kind": kind, "name": c.name, "status": "start"}
                 result = self._clip(await self._exec_tool(c, session_id))
                 used_tools.append(c.name)
-                messages.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
+                messages.append({"role": "tool", "tool_call_id": cids[i], "name": c.name,
                                  "content": result})
                 yield {"type": "step", "kind": kind, "name": c.name, "status": "done"}
 

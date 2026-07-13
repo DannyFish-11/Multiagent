@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -82,25 +83,47 @@ class ApprovalQueue:
 
     # ---- M30:令牌作用域 + 来源可信 硬约束(先于 level_override,deny 优先) ----
 
-    @staticmethod
-    def _amount(params: dict) -> float:
-        """从参数取金额(用于令牌预算)。约定键 amount_usd(与审批策略引擎一致);
-        兼容 amount/usd 及字符串数字。解析不出返回 0(=非计费动作)。"""
-        for k in ("amount_usd", "amount", "usd"):
-            v = params.get(k)
-            if isinstance(v, bool):          # bool 是 int 子类,排除
+    _AMOUNT_KEYS = ("amount_usd", "amount", "usd")
+
+    @classmethod
+    def _amount_raw(cls, params: dict):
+        """取金额键的原始解析值 (float, 是否存在金额键)。存在但非有限/无法解析 → (nan, True)。"""
+        for k in cls._AMOUNT_KEYS:
+            if k not in params:
                 continue
+            v = params[k]
+            if isinstance(v, bool):          # bool 是 int 子类,排除
+                return math.nan, True
             if isinstance(v, (int, float)):
-                return float(v)
+                return float(v), True
             if isinstance(v, str):
                 try:
-                    return float(v.strip())
+                    return float(v.strip()), True
                 except ValueError:
-                    continue
-        return 0.0
+                    return math.nan, True
+            return math.nan, True
+        return 0.0, False
+
+    @classmethod
+    def _amount(cls, params: dict) -> float:
+        """用于预算记账的金额:只有**有限且非负**才计;其余(缺失/nan/inf/负)按 0。"""
+        amt, present = cls._amount_raw(params)
+        return amt if (present and math.isfinite(amt) and amt >= 0) else 0.0
+
+    def _amount_deny(self, params: dict) -> str | None:
+        """金额合法性硬闸(与令牌无关):任何带金额键的动作,非有限(nan/inf)或负数 → deny。
+        堵住 amount_usd=nan/inf 同时绕过预算与数值策略(nan 比较恒 False)的漏洞。"""
+        amt, present = self._amount_raw(params)
+        if not present:
+            return None
+        if not math.isfinite(amt):
+            return f"金额非法(非有限值 {params.get('amount_usd', params.get('amount'))!r})"
+        if amt < 0:
+            return f"金额非法(负数 {amt})"
+        return None
 
     def _scope_deny(self, action: str, params: dict) -> str | None:
-        """令牌作用域硬约束(不含预算——预算走原子预留)。expired/越权/金额非法 → deny。"""
+        """令牌作用域硬约束(不含预算——预算走原子预留)。expired/越权 → deny。"""
         tok = self._delegation
         if tok is None:
             return None
@@ -108,8 +131,6 @@ class ApprovalQueue:
             return f"授权令牌已过期(token={tok.token_id})"
         if not tok.allows(action):
             return f"动作 {action!r} 不在授权令牌许可范围 {list(tok.permissions)}"
-        if self._amount(params) < 0:         # 负额:检查与记账的钳制不对称会成漏洞,直接拒
-            return f"金额非法(负数):{self._amount(params)}"
         return None
 
     def _provenance_deny(self, action: str, params: dict) -> str | None:
@@ -145,7 +166,8 @@ class ApprovalQueue:
         # M30:令牌越权/过期/金额非法 与 来源不可信 属**硬约束**,先于 level_override 判定,
         # deny 优先(安全工具的 auto 也绕不过——与"显式 deny 盖过 auto"同一不变量)。预算不在
         # 此处判(避免 check→execute 之间的 TOCTOU),而在放行后**原子预留**。
-        hard_deny = self._scope_deny(action, params) or self._provenance_deny(action, params)
+        hard_deny = (self._amount_deny(params) or self._scope_deny(action, params)
+                     or self._provenance_deny(action, params))
         if hard_deny:
             level, reason = "deny", hard_deny
         elif level_override:

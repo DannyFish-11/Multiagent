@@ -62,6 +62,10 @@ class QdrantMemoryStore:
                 await self._shared_db.ensure_collection()
             self._ready = True
 
+    async def aclose(self) -> None:
+        """关闭底层 Qdrant 客户端(优雅停机;shared_db 与主库共享同一客户端)。"""
+        await self._db.aclose()
+
     def _target_db(self, visibility: str) -> QdrantAdapter:
         if visibility == "shared":
             if self._shared_db is None:

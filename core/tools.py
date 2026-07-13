@@ -10,6 +10,7 @@ config 审批分级)。
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -162,5 +163,7 @@ def build_toolbox(config, memory, web=None, names=None) -> list[Tool]:
                 t.safe = False
                 tools.append(t)
             except Exception:
-                pass
+                # 别静默吞:算子显式启用的工具构造失败要能看见(否则 agent 当它不存在)
+                logging.getLogger(__name__).warning(
+                    "第三方工具 %r 构造失败,已跳过(检查其 config/依赖)", name, exc_info=True)
     return tools

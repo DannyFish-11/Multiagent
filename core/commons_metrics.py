@@ -38,7 +38,8 @@ class CommonsMetrics:
     def _entry(self, item_id: str) -> dict[str, Any]:
         return self._items.setdefault(item_id, {
             "cites": 0, "reports": 0, "demoted": False,
-            "adopters": [], "first_seen": time.time(), "last_activity": time.time(),
+            "adopters": [], "reporters": [], "first_seen": time.time(),
+            "last_activity": time.time(),
         })
 
     def register(self, item_id: str) -> None:
@@ -58,7 +59,10 @@ class CommonsMetrics:
     def report(self, item_id: str, by_agent: str, reason: str = "") -> int:
         with self._lock:
             e = self._entry(item_id)
-            e["reports"] += 1
+            reporters = e.setdefault("reporters", [])   # 去重上报者:单实例连报不叠加
+            if by_agent not in reporters:
+                reporters.append(by_agent)
+            e["reports"] = len(reporters)               # reports = 不同上报者数
             e["last_activity"] = time.time()
             self._save()
             return e["reports"]
@@ -75,7 +79,8 @@ class CommonsMetrics:
         e = self._items.get(item_id)
         if not e or e["demoted"]:
             return False
-        return e["reports"] >= report_threshold and e["reports"] > len(e["adopters"])
+        distinct_reports = len(e.get("reporters", []))   # 按不同上报者计,防单实例刷举报
+        return distinct_reports >= report_threshold and distinct_reports > len(e["adopters"])
 
     def spread(self, item_id: str) -> int:
         e = self._items.get(item_id, {})

@@ -36,18 +36,23 @@ def _match_predicate(params: dict, key: str, expected: Any) -> bool:
         if key.endswith(op):
             field = key[: -len(op)]
             actual = _get(params, field)
-            if op == "__gte":
-                return actual is not None and actual >= expected
-            if op == "__lte":
-                return actual is not None and actual <= expected
-            if op == "__in":
-                return actual in expected
-            if op == "__not_in":
-                return actual not in expected
-            if op == "__regex":
-                return actual is not None and re.search(expected, str(actual)) is not None
-            if op == "__contains":
-                return actual is not None and expected in actual
+            # 类型不符(如数值谓词遇到字符串/None)按**不匹配**处理,绝不让 TypeError 冒出来
+            # 中断整条策略评估(评估崩溃比谓词落空危险得多;落空后回落 default_level)。
+            try:
+                if op == "__gte":
+                    return actual is not None and actual >= expected
+                if op == "__lte":
+                    return actual is not None and actual <= expected
+                if op == "__in":
+                    return actual in expected
+                if op == "__not_in":
+                    return actual not in expected
+                if op == "__regex":
+                    return actual is not None and re.search(expected, str(actual)) is not None
+                if op == "__contains":
+                    return actual is not None and expected in actual
+            except TypeError:
+                return False
     return _get(params, key) == expected
 
 

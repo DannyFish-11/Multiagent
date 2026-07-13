@@ -77,6 +77,9 @@ class CostLedger:
                        experiment_id: str = "", task_id: str = "",
                        agent_id: str = "", purpose: str = "") -> float:
         self._rollover()
+        # token 数按非负钳制:异常/伪造的负 usage 不得压低累计、腾出预算
+        prompt_tokens = max(0, int(prompt_tokens or 0))
+        completion_tokens = max(0, int(completion_tokens or 0))
         price = self._prices.get(model)
         cost = 0.0
         if price:

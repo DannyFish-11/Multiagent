@@ -11,13 +11,17 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
+import uuid
 from pathlib import Path
+
 import httpx
 
 from core.config import PaymentsSettings
 from core.errors import LayerError
+from core.payment_guard import assert_human_initiated
 
 
 class PaymentDenied(LayerError):
@@ -52,8 +56,9 @@ class PaymentLedger:
     def month_total(self) -> float:
         return self._sum_since(time.time() - 30 * 86400)
 
-    def check_caps(self, amount: float, settings: PaymentsSettings) -> None:
-        """三层笼子:任一超限即拒(在真实支付前调用)。"""
+    def reserve(self, amount: float, settings: PaymentsSettings) -> str:
+        """三层笼子校验 + **原子预留**:在同一把锁内查限额并追加占位记录,金额立即计入
+        日/月累计——杜绝 check→charge 之间的 TOCTOU 并发超支。返回预留 id。"""
         with self._lock:
             if amount > settings.per_tx_usd:
                 raise PaymentDenied(f"单笔 ${amount:.2f} > 上限 ${settings.per_tx_usd:.2f}")
@@ -63,10 +68,26 @@ class PaymentLedger:
             if self.month_total() + amount > settings.monthly_usd:
                 raise PaymentDenied(
                     f"月累计将达 ${self.month_total() + amount:.2f} > 上限 ${settings.monthly_usd:.2f}")
+            rid = uuid.uuid4().hex
+            self._txns.append({"ts": time.time(), "amount_usd": amount,
+                               "_rid": rid, "_pending": True})
+            self._save()
+            return rid
 
-    def record(self, txn: dict) -> None:
+    def finalize(self, rid: str, extra: dict) -> None:
+        """预留兑现:把占位记录补全为正式交易。"""
         with self._lock:
-            self._txns.append(txn)
+            for t in self._txns:
+                if t.get("_rid") == rid:
+                    t.pop("_pending", None)
+                    t.update(extra)
+                    break
+            self._save()
+
+    def refund(self, rid: str) -> None:
+        """预留回滚(支付失败时):移除占位,释放额度。"""
+        with self._lock:
+            self._txns = [t for t in self._txns if t.get("_rid") != rid]
             self._save()
 
 
@@ -82,32 +103,40 @@ class PaymentsAdapter:
             if payee not in self._settings.payee_whitelist:
                 raise PaymentDenied(f"商户白名单模式:{payee!r} 不在名单")
 
-    async def pay(self, *, amount_usd: float, payee: str, purpose: str) -> dict:
-        """执行一次支付(笼子校验在前)。返回含 AP2 留形的 Intent/Cart 双记录。"""
+    async def pay(self, *, amount_usd: float, payee: str, purpose: str, source: str) -> dict:
+        """执行一次支付(笼子校验在前)。source 必填:非人类来源(email/web)一律拒(硬红线,
+        与审批级别正交)。金额须为有限正数。原子预留额度 → 真实结算 → 兑现;失败退款。"""
+        assert_human_initiated(source)          # 硬红线:仅人类会话可发起支付链
         if not self._settings.enabled:
             raise PaymentDenied("支付能力未启用(附录 A 默认拒付;config.payments.enabled=false)")
         if self._settings.provider == "none":
             raise PaymentDenied("未配置支付供应商(停点:虚拟卡/x402 供应商由人类选定开户)")
+        if not isinstance(amount_usd, (int, float)) or isinstance(amount_usd, bool) \
+                or not math.isfinite(amount_usd) or amount_usd <= 0:
+            raise PaymentDenied(f"金额非法(须为有限正数):{amount_usd!r}")
         self._check_payee(payee)
-        self._ledger.check_caps(amount_usd, self._settings)
+        rid = self._ledger.reserve(float(amount_usd), self._settings)   # 原子预留(闭 TOCTOU)
+
+        try:
+            if self._settings.provider == "virtual_card":
+                result = await self._virtual_card_charge(amount_usd, payee)
+            elif self._settings.provider == "x402":
+                result = await self._x402_settle(amount_usd, payee)
+            else:
+                raise PaymentDenied(f"未知供应商: {self._settings.provider}")
+        except Exception:
+            self._ledger.refund(rid)            # 结算失败 → 释放预留额度
+            raise
 
         # AP2 留形:意图与购物车分离记录(未来平移到 AP2 Mandate)
         intent = {"type": "intent", "amount_usd": amount_usd, "payee": payee,
                   "purpose": purpose, "ts": time.time()}
         cart = {"type": "cart", "amount_usd": amount_usd, "payee": payee, "ts": time.time()}
-
-        if self._settings.provider == "virtual_card":
-            result = await self._virtual_card_charge(amount_usd, payee)
-        elif self._settings.provider == "x402":
-            result = await self._x402_settle(amount_usd, payee)
-        else:
-            raise PaymentDenied(f"未知供应商: {self._settings.provider}")
-
-        txn = {"ts": time.time(), "amount_usd": amount_usd, "payee": payee,
-               "purpose": purpose, "provider": self._settings.provider,
-               "intent": intent, "cart": cart, "result": result}
-        self._ledger.record(txn)
-        return txn
+        extra = {"payee": payee, "purpose": purpose, "source": source,
+                 "provider": self._settings.provider, "intent": intent, "cart": cart,
+                 "result": result}
+        self._ledger.finalize(rid, extra)
+        return {"ts": time.time(), "amount_usd": amount_usd, **extra}
 
     async def _virtual_card_charge(self, amount: float, payee: str) -> dict:
         """单次限额虚拟卡:开卡(限额=amount)→ 返回卡号供付款 → 用完即焚。"""

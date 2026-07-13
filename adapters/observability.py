@@ -133,6 +133,15 @@ class _TracedBase:
 
 
 class TracedLLM(_TracedBase):
+    def __init__(self, inner, tracer, cfg) -> None:
+        super().__init__(inner, tracer, cfg)
+        # 只在底层客户端**确有**该能力时才暴露 chat_tools/chat_stream——否则 hasattr(wrapper,
+        # "chat_tools") 会恒真、把非 function-calling 模型误判为可用,导致运行时 AttributeError。
+        if hasattr(inner, "chat_tools"):
+            self.chat_tools = self._traced_chat_tools
+        if hasattr(inner, "chat_stream"):
+            self.chat_stream = self._traced_chat_stream
+
     async def chat(self, messages, **kw) -> str:
         with self._tracer.start_as_current_span("llm.chat") as span:
             _apply_tags(span, self._cfg)
@@ -158,8 +167,9 @@ class TracedLLM(_TracedBase):
                                    int(usage.get("completion_tokens", 0)))
             return out
 
-    async def chat_tools(self, messages, tools, **kw):
-        """M22 工具循环的 LLM 调用也埋点(默认 autonomy=tools 走这条,不能漏)。"""
+    async def _traced_chat_tools(self, messages, tools, **kw):
+        """M22 工具循环的 LLM 调用也埋点(默认 autonomy=tools 走这条,不能漏)。
+        仅当底层支持时经 __init__ 绑定为 self.chat_tools。"""
         with self._tracer.start_as_current_span("llm.chat_tools") as span:
             _apply_tags(span, self._cfg)
             model = getattr(self._inner, "model", "") or ""
@@ -184,8 +194,9 @@ class TracedLLM(_TracedBase):
                                    int(usage.get("completion_tokens", 0)))
             return turn
 
-    async def chat_stream(self, messages, **kw):
-        """流式 LLM 调用埋点(autonomy=chat 的真流式走这条)。span 覆盖整段流。"""
+    async def _traced_chat_stream(self, messages, **kw):
+        """流式 LLM 调用埋点(autonomy=chat 的真流式走这条)。span 覆盖整段流。
+        仅当底层支持时经 __init__ 绑定为 self.chat_stream。"""
         with self._tracer.start_as_current_span("llm.chat_stream") as span:
             _apply_tags(span, self._cfg)
             model = getattr(self._inner, "model", "") or ""

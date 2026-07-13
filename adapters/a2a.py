@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.errors import LayerError
-from core.identity import AgentIdentity, verify_signature
+from core.identity import AgentIdentity, verify_envelope, verify_signature
 from core.schemas import MultimodalInput
 
 if TYPE_CHECKING:
@@ -124,7 +124,13 @@ class A2AServerAdapter:
         """处理一次委托。返回带本方身份签名的响应信封。
 
         鉴权:未知 agent_id 默认拒绝(需人工批准/加白);白名单放行。
+        安全:若带了签名信封,from_agent_id 必须由**验签通过**的信封背书且身份一致——明文
+        from_agent_id 不可信,信封无效/身份不符即降级为未认证(网络入口经执行器强制带信封)。
         """
+        if envelope is not None and (
+                not verify_envelope(envelope)
+                or envelope.get("identity", {}).get("agent_id") != from_agent_id):
+            from_agent_id = None
         if not from_agent_id or not await self._trust.is_trusted(from_agent_id):
             return self._identity.signed_envelope({
                 "status": "approval_required",
@@ -196,9 +202,13 @@ class A2AServerAdapter:
                         raise json.JSONDecodeError("not an object", text, 0)
                 except json.JSONDecodeError:
                     req = {"skill": "memory_search", "params": {"query": text}}
+                # 网络入口:合法请求须为**签名信封**;非信封/无签名一律按未认证处理(→ 需人工批准)
+                is_env = all(k in req for k in ("payload", "signature", "identity"))
+                envelope = req if is_env else None
+                payload = req["payload"] if is_env and isinstance(req.get("payload"), dict) else req
                 result = await adapter.handle_task(
-                    req.get("skill", "memory_search"), req.get("params", {}),
-                    req.get("from_agent_id"))
+                    payload.get("skill", "memory_search"), payload.get("params", {}),
+                    payload.get("from_agent_id"), envelope=envelope)
                 await event_queue.enqueue_event(a2a_types.Message(
                     message_id=_uuid.uuid4().hex,
                     role=a2a_types.Role.ROLE_AGENT,
@@ -285,7 +295,7 @@ class A2AClientAdapter:
 
         import httpx
 
-        delegation = self.build_delegation(skill, params)["payload"]
+        delegation = self.build_delegation(skill, params)   # 完整签名信封(含 signature),非仅 payload
         body = {
             "jsonrpc": "2.0", "id": _uuid.uuid4().hex, "method": "SendMessage",
             "params": {"message": {

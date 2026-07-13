@@ -77,10 +77,10 @@ def test_commons_cite_report_demote(tmp_path):
     assert m.spread("item1") == 2  # 扩散度 = 采用的不同实例数
     assert m.snapshot()["item1"]["cites"] == 3
 
-    # 举报 → 降级判据
-    for _ in range(3):
-        m.report("item1", "agentC", "错误信息")
-    # cites 采用者 2 个,举报 3 次 → reports(3) > adopters(2) 且达阈值
+    # 举报 → 降级判据(按不同上报者计数,防单实例刷举报)
+    for r in ("rc1", "rc2", "rc3"):
+        m.report("item1", r, "错误信息")
+    # cites 采用者 2 个,3 个不同上报者 → reports(3) > adopters(2) 且达阈值
     assert m.should_demote("item1", report_threshold=3) is True
     m.demote("item1")
     assert m.snapshot()["item1"]["demoted"] is True
@@ -102,10 +102,10 @@ def test_commons_survival_and_persistence(tmp_path):
 def test_commons_natural_selection_signal(tmp_path):
     """C 臂'自然筛选'依据:高举报低引用条目应被降级,高引用条目存活。"""
     m = CommonsMetrics(tmp_path / "c.json")
-    # 坏品:无人采用,多次举报
+    # 坏品:无人采用,多个不同上报者举报
     m.register("bad")
-    for _ in range(4):
-        m.report("bad", "reviewer")
+    for r in ("rv1", "rv2", "rv3", "rv4"):
+        m.report("bad", r)
     # 良品:多实例采用,零举报
     m.register("good")
     for a in ("a1", "a2", "a3"):

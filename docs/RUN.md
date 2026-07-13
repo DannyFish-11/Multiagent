@@ -16,7 +16,7 @@
 
 启动后会**自动打开浏览器**到聊天页(`http://127.0.0.1:8002`)。默认是 **demo 档**(零 key / 零 GPU,回显检索到的记忆,验证记忆闭环)。想用真实大模型:在可执行文件**同目录放一个 `.env`**(见下),重启即可。
 
-> Release 二进制由 GitHub Actions 为每个 tag 自动构建,并在挂载前跑 `/healthz` 自检。
+> Release 二进制由 GitHub Actions 为每个 tag 自动构建,并在挂载前跑 `/healthz` 自检(产物先作为 draft release 生成,维护者确认后发布)。
 
 ## 2. 双击启动器(已 clone 仓库)
 

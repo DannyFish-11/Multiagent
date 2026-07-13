@@ -92,6 +92,21 @@ async def test_declarative_first_match_wins(tmp_path):
     assert q.classify("web_submit", {"url": "http://good.com"})[0] == "confirm"
 
 
+async def test_nonfinite_or_negative_amount_hard_denied(tmp_path):
+    """回归:amount_usd=nan/inf/负数 曾同时绕过预算记账与数值策略(nan 比较恒 False),
+    须被金额硬闸拒绝——即便 policy 表把该动作配成 auto。"""
+    q, audit = make_queue(tmp_path, policies=[
+        PolicyRule(action="pay", when={}, level="auto")])  # 恶意/误配为 auto
+    for bad in (float("nan"), float("inf"), float("-inf"), -1.0, "nan", "not-a-number", True):
+        with pytest.raises(ApprovalDenied):
+            await q.gate(action="pay", params={"amount_usd": bad},
+                         source="user", execute=lambda: _exec())
+        assert audit.read_all()[-1]["decision"] == "denied"
+    # 合法正常金额仍放行(auto)
+    assert await q.gate(action="pay", params={"amount_usd": 3.0},
+                        source="user", execute=lambda: _exec("ok")) == "ok"
+
+
 def test_predicate_operators(tmp_path):
     from core.policy_engine import evaluate
 

@@ -132,7 +132,13 @@ class Conductor:
                 job.yaml_text, self._image,
                 f"{self._upload_base}/{job.experiment_id}/datapackage.tar.zst")
             self._set_state(job, "provisioning", now)
-            job.vm_id = await self._provider.create_vm(job.experiment_id, cloud_init, secrets)
+            try:
+                job.vm_id = await self._provider.create_vm(job.experiment_id, cloud_init, secrets)
+            except Exception as exc:
+                # 建 VM 失败:别把 job 卡在 provisioning(会永久占一个并发槽 + 预算),标 failed 释放
+                self._set_state(job, "failed", now)
+                await self._notify(f"[建 VM 失败] {job.experiment_id}:{exc}")
+                continue
             self._set_state(job, "running", now)
             dispatched.append(job.experiment_id)
         return dispatched

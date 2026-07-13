@@ -302,15 +302,22 @@ async def test_widely_adopted_entry_resists_report_brigading(tmp_path):
     # 5 个真实实例采用
     for i in range(5):
         await store.adopt(r.entry_id, f"adopter-{i}")
-    # 单一实例连报 3 次达阈值,但 reports(3) 不超过采用者(5) → 不降级
-    for _ in range(3):
+    # 单一实例连报多次:去重后只算 1 个不同上报者,远不及阈值 → 不降级(防刷举报)
+    for _ in range(6):
         res = await store.report(r.entry_id, "attacker", "恶意举报")
     assert res["demoted"] is False
     assert len(store.browse("memory")) == 1  # 仍在池中可见
-    # 举报累计超过采用者数(6 > 5)后才降级
-    for _ in range(3):
-        res = await store.report(r.entry_id, "attacker", "恶意举报")
-    assert res["demoted"] is True
+    # 3 个不同上报者达阈值,但 reports(3)不超过采用者(5) → 采用感知,仍不降级
+    for i in range(3):
+        res = await store.report(r.entry_id, f"reporter-{i}", "举报")
+    assert res["demoted"] is False
+    assert len(store.browse("memory")) == 1
+    # 不同上报者数超过采用者数(6 > 5)后才降级(一旦降级即不可见)
+    demoted_any = False
+    for i in range(3, 6):
+        res = await store.report(r.entry_id, f"reporter-{i}", "举报")
+        demoted_any = demoted_any or res["demoted"]
+    assert demoted_any is True
     assert store.browse("memory") == []
 
 

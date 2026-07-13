@@ -126,7 +126,23 @@ def create_app(
         logger.info("L3 api ready: memory.backend=%s autonomy=%s agent_id=%s",
                     cfg.memory.backend, cfg.agent.autonomy, app.state.identity.agent_id)
         yield
+        # 优雅停机:先排空后台记忆写入,再关闭长连客户端(否则每次重启泄漏 httpx 连接池;
+        # vectordb.mode=local 时 Qdrant 目录锁不释放,同进程重建会拿不到锁)。
         await app.state.agent.drain()
+        # 只关闭本 app 自建的客户端;调用方注入的 llm/memory 归其所有,不代为关闭
+        # (否则测试/多 app 共享注入实例时会被提前关掉,复用即报 "instance is closed")。
+        owned = [app.state.embedder]
+        if llm is None:
+            owned.append(app.state.llm)
+        if memory is None:
+            owned.append(app.state.memory)
+        for obj in owned:
+            aclose = getattr(obj, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:
+                    logger.exception("关闭客户端失败(%s)", type(obj).__name__)
 
     app = FastAPI(title="memory-agent L3 api", lifespan=lifespan)
 

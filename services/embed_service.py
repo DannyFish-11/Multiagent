@@ -48,6 +48,12 @@ def create_app(config: AppConfig | None = None, embedder: Embedder | None = None
         logger.info("L1 embed service ready: backend=%s dim=%d", cfg.embedder.backend, emb.dim)
         yield
         await app.state.proxy.aclose()
+        emb_close = getattr(app.state.embedder, "aclose", None)   # remote/jina_api 持 httpx 池
+        if emb_close is not None:
+            try:
+                await emb_close()
+            except Exception:
+                logger.exception("关闭嵌入客户端失败")
 
     app = FastAPI(title="memory-agent L1 embed service", lifespan=lifespan)
 

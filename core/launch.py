@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.config import load_config
 
     cfg = load_config()
-    port = args.port or cfg.services.api_port
+    port = args.port if args.port is not None else cfg.services.api_port   # --port 0(临时端口)也尊重
     url = f"http://{args.host}:{port}"
 
     print(f"memory-agent 启动中… {'(demo 档:零 key/零 GPU)' if demo else ''}")

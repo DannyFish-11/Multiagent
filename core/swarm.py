@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from core.errors import LayerError
 from core.prompts import memory_block
 from core.schemas import ChatResponse, MultimodalInput
+from core.tool_agent import _positive_or
 from core.tools import Tool, build_toolbox, handoff_tool
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class SwarmAgent:
 
             profile = select_profile(config)
         self._profile = profile
-        self._max_tools = profile.max_tools_per_turn or _MAX_TOOLS_PER_TURN
+        self._max_tools = _positive_or(profile.max_tools_per_turn, _MAX_TOOLS_PER_TURN)
         self._retrieval_logger = None      # M8 埋点(可选注入)
 
     def set_retrieval_logger(self, logger_) -> None:
@@ -126,7 +127,7 @@ class SwarmAgent:
         # 无常驻 system:每轮按当前 active 成员现算 system,拼在共享转录之前
         messages: list[dict] = [{"role": "user", "content": message}]
         active = self._entry
-        max_steps = self._profile.max_steps or self._config.loops.limit("swarm_steps")
+        max_steps = _positive_or(self._profile.max_steps, self._config.loops.limit("swarm_steps"))
         max_handoffs = self._config.loops.limit("delegation_chain")
         sampling = self._profile.sampling
         handoffs = 0
@@ -144,15 +145,17 @@ class SwarmAgent:
                 yield {"type": "done", "event_id": event_id}
                 return
             calls = turn.tool_calls[:self._max_tools]
+            # 规范化 tool_call id(模型可能给空/重复 → 下一轮转录非法):改成确定性唯一 id
+            cids = [f"c{_step}_{i}" for i in range(len(calls))]
             messages.append({
                 "role": "assistant", "content": turn.content or "",
-                "tool_calls": [{"id": c.id, "type": "function", "function": {
+                "tool_calls": [{"id": cids[i], "type": "function", "function": {
                     "name": c.name,
                     "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
-                    for c in calls]})
+                    for i, c in enumerate(calls)]})
             # 处理这一批的每个调用(每个 tool_call 都必须有对应 tool 结果,保证转录合法)
             next_active: str | None = None
-            for c in calls:
+            for i, c in enumerate(calls):
                 tool = member.tool(c.name)
                 if tool is not None and tool.handoff_to:
                     target = tool.handoff_to
@@ -170,13 +173,13 @@ class SwarmAgent:
                         except Exception as exc:
                             logger.info("成员 %s 转交 %s 被拒:%s", member.name, target, exc)
                             result = f"[转交 {target} 被拒:{exc}]"
-                    messages.append({"role": "tool", "tool_call_id": c.id,
+                    messages.append({"role": "tool", "tool_call_id": cids[i],
                                      "name": c.name, "content": result})
                 else:
                     yield {"type": "step", "kind": "tool", "name": c.name,
                            "status": "start", "member": member.name}
                     result = self._clip(await self._exec_tool(member, c, session_id))
-                    messages.append({"role": "tool", "tool_call_id": c.id,
+                    messages.append({"role": "tool", "tool_call_id": cids[i],
                                      "name": c.name, "content": result})
                     yield {"type": "step", "kind": "tool", "name": c.name,
                            "status": "done", "member": member.name}

@@ -110,6 +110,31 @@ async def test_llm_span_carries_model_tokens_and_context_tags():
     assert "latency_ms" in a
 
 
+def test_traced_llm_does_not_fake_capabilities():
+    """回归:TracedLLM 曾把 chat_tools/chat_stream 定义成实例方法,使 hasattr(wrapper,
+    'chat_tools') 恒真——即便包的是 EchoLLM(无工具能力)。api 装配以此判断 autonomy,
+    会把非 function-calling 模型误判为可用 → 运行时 500。包装后能力探测须与底层一致。"""
+    pytest.importorskip("opentelemetry.sdk.trace")
+    cfg = load_config()
+    tracer, _ = _tracer_and_exporter()
+
+    # 底层无 chat_tools/chat_stream:包装后也不得凭空出现
+    bare = TracedLLM(EchoLLM(), tracer, cfg)
+    assert not hasattr(bare, "chat_tools")
+    assert not hasattr(bare, "chat_stream")
+
+    # 底层有 chat_tools:包装后暴露且可调用
+    class _FCLLM:
+        model = "fc"
+        async def chat(self, messages, **kw):
+            return "x"
+        async def chat_tools(self, messages, tools, **kw):
+            return {"content": "tool-turn", "tool_calls": []}
+
+    fc = TracedLLM(_FCLLM(), tracer, cfg)
+    assert hasattr(fc, "chat_tools")
+
+
 async def test_embedder_and_memory_spans():
     pytest.importorskip("opentelemetry.sdk.trace")
     cfg = load_config()

@@ -2,6 +2,39 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.12.1 — 全项目深度审查 + 加固(4 个并行子 agent 二次全库对抗审计)
+
+在 0.12.0 之上再做一轮更深的全项目对抗审计,4 个并行子 agent 各扫一片,共发现并**修复
+15 处真实缺陷**(既有代码与新代码兼有),全部补回归测试锁定(317 passed / 10 skipped,ruff 全绿):
+
+**安全与金钱(硬红线):**
+- **审批闸金额硬闸**(`core/approval.py`):`amount_usd=nan/inf/负数` 此前可**同时绕过预算记账
+  与数值策略**(nan 的一切比较恒 False),现由 `_amount_deny` 在闸口直接 deny——即便 policy
+  误配为 auto 也拦下;预算记账只认有限非负值。
+- **支付来源闸内置化 + 原子预留**(`adapters/payments.py`):`pay()` 的 `source` 改为**必填**且
+  内部强制 `assert_human_initiated`(不再靠调用方自觉);`reserve→charge→finalize`,**结算失败自动
+  退款**释放额度;`check→charge` 的 TOCTOU 窗口用同锁原子预留关闭(并发多笔不越日/月上限)。
+- **A2A 信封校验**(`adapters/a2a.py`):`handle_task` 对签名/身份不符的信封**降级来源身份**
+  (`from_agent_id=None`),`delegate()` 发送完整签名信封而非裸 payload。
+- 成本账本负 usage 钳零(`adapters/cost_ledger.py`);payment_guard 集成负向测试改为验证 `pay()`
+  **内部**拒绝非人类来源(而非测试自证)。
+
+**可用性(默认档不再静默退化为 500):**
+- **可观测性能力探测**(`adapters/observability.py`):`TracedLLM` 曾把 `chat_tools/chat_stream`
+  定义成实例方法,使 `hasattr(wrapper, "chat_tools")` **恒真**——api 据此判 autonomy,会把 echo 等
+  非 function-calling 模型误判为可用 → 运行时 500;改为**仅当底层确有该能力**时才绑定暴露。
+- **优雅停机按所有权关闭**(`services/api.py`/`embed_service.py`):只关闭本 app 自建的客户端,
+  注入(测试/多 app 共享)的 llm/memory 归调用方所有、不代关;并补 `QdrantMemoryStore.aclose()`
+  与嵌入服务的连接释放,消除重启泄漏。
+
+**健壮性:**
+- 群体资产库举报**去重按不同上报者计数**(`core/commons_metrics.py`):单实例连报不再叠加,广采条目
+  须更多**不同**举报者方降级(防刷举报打压)。
+- conductor 建 VM 失败**标 failed 释放并发槽/预算**、不再永久卡 provisioning(`core/conductor.py`)。
+- 分级规则引擎数值谓词遇类型不符**落空回落**、不冒 TypeError 中断整条评估(`core/policy_engine.py`)。
+- `--port 0`、`max_tools/max_steps` 非正值等边界钳制(`core/launch.py`/`tool_agent.py`/`swarm.py`);
+  第三方工具装载失败改**记 warning** 不再静默 `pass`(`core/tools.py`)。
+
 ## 0.12.0 — 一键运行(M31:双击即用,不用 clone/命令行)
 
 让"跑起来"从"clone + 装环境 + 敲命令"变成**双击就用**:

@@ -97,31 +97,34 @@ def create_app(
         from core.simulate import Simulator
 
         app.state.simulator = Simulator(cfg.simulation, llm=_llm)
+        # M33:注入扫描器,注入 WebAdapter——抓取正文进模型前扫描提示词注入特征。
+        from adapters.web import WebAdapter
+        from core.injection import InjectionScanner
+
+        app.state.injection_scanner = InjectionScanner(cfg.injection, llm=_llm)
+        _web = WebAdapter(cfg.web, scanner=app.state.injection_scanner)
         # 装配 agent(需 function-calling 模型):autonomy=supervisor → 中心调度委派(M25);
         # swarm → 去中心化多成员(M24);tools → 会用工具的单 agent(M22);否则 → 回落记忆问答。
         _fc = hasattr(_llm, "chat_tools")
         if cfg.agent.autonomy == "supervisor" and _fc and cfg.supervisor.workers:
-            from adapters.web import WebAdapter
             from core.supervisor import build_supervisor
 
             app.state.agent = build_supervisor(
-                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals,
+                cfg, _llm, _memory, _web, approval=app.state.approvals,
                 simulator=app.state.simulator)
         elif cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
-            from adapters.web import WebAdapter
             from core.swarm import build_swarm
 
             app.state.agent = build_swarm(
-                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals,
+                cfg, _llm, _memory, _web, approval=app.state.approvals,
                 simulator=app.state.simulator)
         elif cfg.agent.autonomy == "tools" and _fc:
-            from adapters.web import WebAdapter
             from core.tool_agent import ToolAgent
             from core.tools import build_toolbox
 
             app.state.agent = ToolAgent(
                 _llm, _memory, cfg, approval=app.state.approvals,
-                tools=build_toolbox(cfg, _memory, WebAdapter(cfg.web)),
+                tools=build_toolbox(cfg, _memory, _web),
                 simulator=app.state.simulator)
         else:
             app.state.agent = MemoryAgent(_llm, _memory, cfg)

@@ -2,6 +2,28 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.14.0 — M33 提示词注入检测硬化(主动扫描不可信内容 + 红队语料)
+
+对标 YC Demo Day #8"Agent 安全防御基础设施",但**只做防御性检测,坚决不碰其"自主重训
+防火墙"**——能自主改写自己安全策略的 agent,就是能自主削弱自己护栏的 agent;安全策略变更
+是人类停点。
+
+- **主动注入检测(启发式,确定性、默认开)** `core/injection.py`:在既有"结构隔离 +
+  提示叮嘱"(`<untrusted_web_content>` 包裹)之上,主动扫描不可信正文里的注入手法——指令覆盖
+  (ignore previous instructions / 忽略以上指令)、角色劫持(you are now DAN / 扮演)、沙箱标签
+  逃逸(闭合 `</untrusted_web_content>`、伪造 `<|im_start|>system`)、诱导泄露(reveal system
+  prompt / 泄露系统提示词)、改动性动作诱导、base64 混淆。中英双语,类别权重去重累加判级。
+- **分级处置**:clean 原样通过;**suspicious 一律仅加告警横幅、不拦**(避免误伤);malicious
+  按 `config.injection.on_detect` 处置——`annotate`(强告警横幅)| `redact`(屏蔽命中片段)|
+  `block`(拒绝返回,抛 `InjectionBlocked` 让工具循环回灌)。默认 `annotate`(非破坏性)。
+- **可选 LLM 二次分类(默认关)**:启发式判 clean 时再兜一层;命中升为 suspicious。检测器
+  自身故障一律 **fail-open**(放行原文),不因误判吞掉合法内容。
+- **接入不可信入口**:`WebAdapter.fetch` 抓取正文进模型前先扫描(`services/api.py` 注入
+  `InjectionScanner`),横幅/屏蔽并入不可信块内。`scanner=None` 时行为不变(向后兼容)。
+- 新增 `config.injection` 配置段。测试 `tests/test_m33_injection.py` 15 例:红队语料判级
+  (10 条 payload 全捕获)、良性对照零误报(6 条)、三种处置策略、LLM 分类与 fail-open、
+  WebAdapter 接入与向后兼容。**346 passed / 10 skipped**,ruff 全绿。
+
 ## 0.13.0 — M32 Gecko-lite 预执行模拟(危险动作真实执行前先"预演")
 
 借鉴 Gecko(ICML'26)"状态化模拟 + 失败反馈"的思路,但**只挑与本项目安全底座咬合的两点、

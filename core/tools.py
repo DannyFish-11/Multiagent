@@ -41,6 +41,10 @@ class Tool:
     safe: bool = False                                # True → 审批 level_override=auto
     handoff_to: str = ""                              # 非空 → 这是转交工具(M24 swarm),
     #                                                   调用即把控制权交给该 named 成员
+    mutating: bool = False                            # M32:改动外部状态(发信/删档/下单等),
+    #                                                   预执行模拟会为其生成效果预览供人类批准
+    preview: Callable[[dict], Awaitable[str]] | None = None   # M32:可选**无副作用**预览回调,
+    #                                                   返回"这次调用会造成什么"的确定性描述
 
     def spec(self) -> dict:
         """OpenAI function-calling 规格。"""
@@ -66,31 +70,41 @@ def remember_tool(memory) -> Tool:
     async def run(args: dict) -> str:
         mid = await memory.add(MultimodalInput.text(args["text"]), {"source": "tool"})
         return f"已记住(id={mid})"
+
+    async def preview(args: dict) -> str:
+        text = str(args.get("text", ""))
+        return f"将向长期记忆写入一条记录:{text[:120]}" + ("…" if len(text) > 120 else "")
     return Tool("remember", "把一条值得长期记住的信息存入记忆",
                 {"type": "object", "properties": {
                     "text": {"type": "string", "description": "要记住的自包含陈述"}},
                  "required": ["text"]},
-                run, safe=True)
+                run, safe=True, mutating=True, preview=preview)
 
 
 def web_search_tool(web) -> Tool:
     async def run(args: dict) -> str:
         res = await web.search(args["query"], k=int(args.get("k", 5)))
         return json.dumps(res, ensure_ascii=False)
+
+    async def preview(args: dict) -> str:
+        return f"将联网搜索:{str(args.get('query', ''))[:120]}"
     return Tool("web_search", "联网搜索(返回标题/链接/摘要)",
                 {"type": "object", "properties": {"query": {"type": "string"}},
                  "required": ["query"]},
-                run, action="web_search")
+                run, action="web_search", preview=preview)
 
 
 def web_fetch_tool(web) -> Tool:
     async def run(args: dict) -> str:
         r = await web.fetch(args["url"])
         return r["untrusted"]                          # 已包裹为不可信数据块(防注入)
+
+    async def preview(args: dict) -> str:
+        return f"将抓取网页正文:{str(args.get('url', ''))[:200]}"
     return Tool("web_fetch", "抓取一个网页的正文",
                 {"type": "object", "properties": {"url": {"type": "string"}},
                  "required": ["url"]},
-                run, action="web_fetch")
+                run, action="web_fetch", preview=preview)
 
 
 # M30 ②:只有**可信代码**可注入的元字段;LLM 生成的工具参数里一律剥除,防其自证数据来源

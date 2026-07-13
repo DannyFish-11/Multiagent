@@ -40,13 +40,14 @@ class SwarmMember:
 
 class SwarmAgent:
     def __init__(self, llm, memory, config, members: dict[str, SwarmMember],
-                 entry: str, approval=None, profile=None) -> None:
+                 entry: str, approval=None, profile=None, simulator=None) -> None:
         self._llm = llm
         self._memory = memory
         self._config = config
         self._members = members
         self._entry = entry
         self._approval = approval
+        self._simulator = simulator        # M32:预执行模拟(参数校验 + 效果预览);None → 不启用
         if profile is None:
             from core.harness import select_profile
 
@@ -84,7 +85,8 @@ class SwarmAgent:
 
     # ---- 工具执行(普通工具经审批闸;转交工具经审计后切换 active) ----
 
-    async def _gate(self, member: SwarmMember, tool, call, session_id: str) -> str:
+    async def _gate(self, member: SwarmMember, tool, call, session_id: str,
+                    preview: str = "") -> str:
         """经审批闸执行一个工具(safe → level_override=auto,但显式 deny 仍生效)。
         **不吞异常**:被拒/超时会抛出,由调用方决定后续(普通工具回灌错误,转交则不切换)。"""
         from core.tools import sanitize_tool_args
@@ -98,16 +100,29 @@ class SwarmAgent:
             return await self._approval.gate(
                 action=tool.action or tool.name, params=args, execute=_do,
                 source="user", agent_id=member.name, session_id=session_id,
-                level_override="auto" if tool.safe else None)
+                level_override="auto" if tool.safe else None, preview=preview)
         return await _do()
 
-    async def _exec_tool(self, member: SwarmMember, call, session_id: str) -> str:
-        """普通工具:被拒/出错优雅回灌给 LLM,不崩。"""
+    async def _exec_tool(self, member: SwarmMember, call, session_id: str,
+                         task: str = "") -> str:
+        """普通工具:被拒/出错优雅回灌给 LLM,不崩。M32:执行前先校验参数 + 生成效果预览。"""
         tool = member.tool(call.name)
         if tool is None:
             return f"未知工具:{call.name}(当前成员 {member.name} 不可用)"
+        from core.tools import sanitize_tool_args
+
+        effect = ""
+        if self._simulator is not None:
+            args = sanitize_tool_args(call.arguments)
+            assessment = await self._simulator.assess(tool, args, task=task)
+            if not assessment.ok:      # 参数不合法 → 不执行、不入审批,回灌纠错反馈让 LLM 修正
+                logger.info("成员 %s 工具 %s 参数校验未通过:%s",
+                            member.name, call.name, assessment.reason)
+                return (f"[参数校验未通过:{assessment.reason}。"
+                        "请据此修正参数后重试,不要原样重复调用。]")
+            effect = assessment.effect
         try:
-            return await self._gate(member, tool, call, session_id)
+            return await self._gate(member, tool, call, session_id, preview=effect)
         except Exception as exc:
             logger.info("成员 %s 工具 %s 未完成:%s", member.name, call.name, exc)
             return f"[工具 {call.name} 未执行:{exc}]"
@@ -178,7 +193,7 @@ class SwarmAgent:
                 else:
                     yield {"type": "step", "kind": "tool", "name": c.name,
                            "status": "start", "member": member.name}
-                    result = self._clip(await self._exec_tool(member, c, session_id))
+                    result = self._clip(await self._exec_tool(member, c, session_id, task=message))
                     messages.append({"role": "tool", "tool_call_id": cids[i],
                                      "name": c.name, "content": result})
                     yield {"type": "step", "kind": "tool", "name": c.name,
@@ -236,7 +251,7 @@ class SwarmAgent:
         return None
 
 
-def build_swarm(config, llm, memory, web=None, approval=None) -> SwarmAgent:
+def build_swarm(config, llm, memory, web=None, approval=None, simulator=None) -> SwarmAgent:
     """按 config.swarm 组装 SwarmAgent。校验:成员非空、名字唯一、entry 与所有 handoffs
     都指向已定义成员——配错在装配期 fail-fast(doctor 亦会预检),不留到运行时。"""
     specs = config.swarm.members
@@ -261,4 +276,5 @@ def build_swarm(config, llm, memory, web=None, approval=None) -> SwarmAgent:
         tools += [handoff_tool(t) for t in m.handoffs]
         members[m.name] = SwarmMember(name=m.name, prompt=m.prompt,
                                       tools=tools, handoffs=tuple(m.handoffs))
-    return SwarmAgent(llm, memory, config, members, entry, approval=approval)
+    return SwarmAgent(llm, memory, config, members, entry, approval=approval,
+                      simulator=simulator)

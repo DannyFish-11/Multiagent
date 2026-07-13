@@ -239,6 +239,17 @@ class ApprovalSettings(BaseModel):
         default_factory=lambda: ["erp_verified", "verified", "system", "user"])
 
 
+class SimulationSettings(BaseModel):
+    """M32 Gecko-lite 预执行模拟:危险动作真实执行前先做参数校验 + 效果预览。
+
+    确定性、零成本的环节(规则层校验 + 工具自报/schema 摘要预览)默认开;要花钱、可能
+    "自信地错"的 LLM 环节(语义校验 / LLM 效果估计)默认关,显式开启才用。"""
+    enabled: bool = True                    # 规则层参数校验 + 效果预览(确定性,默认开)
+    semantic_validation: bool = False       # LLM 语义参数校验(schema 合法但语义不对):需 LLM
+    llm_preview: bool = False               # 工具无自报预览时用 LLM 估计副作用:需 LLM,标"估计"
+    preview_max_chars: int = 500            # 预览文本上限
+
+
 class DelegationSettings(BaseModel):
     """M30 ① 作用域授权令牌:给自主运行套"临时工牌"。默认关(需显式签发);
     开启后由 agent 身份签发一张令牌,审批闸强制其 permissions/预算/时效(治理刚性)。"""
@@ -380,6 +391,7 @@ class AppConfig(BaseSettings):
     metabolism: MetabolismSettings = Field(default_factory=MetabolismSettings)
     concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
     approval: ApprovalSettings = Field(default_factory=ApprovalSettings)
+    simulation: SimulationSettings = Field(default_factory=SimulationSettings)
     delegation: DelegationSettings = Field(default_factory=DelegationSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     gmail_poll: GmailPollSettings = Field(default_factory=GmailPollSettings)

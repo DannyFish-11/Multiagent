@@ -92,6 +92,11 @@ def create_app(
             logger.info("delegation token 已签发:permissions=%s budget=%s ttl_s=%s",
                         cfg.delegation.permissions, cfg.delegation.max_budget_usd,
                         cfg.delegation.ttl_s)
+        # M32:预执行模拟(参数校验 + 效果预览);注入各 agent 的工具循环。默认开(纯确定性),
+        # 语义校验/LLM 预览需显式开启。传 _llm 供可选 LLM 环节使用。
+        from core.simulate import Simulator
+
+        app.state.simulator = Simulator(cfg.simulation, llm=_llm)
         # 装配 agent(需 function-calling 模型):autonomy=supervisor → 中心调度委派(M25);
         # swarm → 去中心化多成员(M24);tools → 会用工具的单 agent(M22);否则 → 回落记忆问答。
         _fc = hasattr(_llm, "chat_tools")
@@ -100,13 +105,15 @@ def create_app(
             from core.supervisor import build_supervisor
 
             app.state.agent = build_supervisor(
-                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals)
+                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals,
+                simulator=app.state.simulator)
         elif cfg.agent.autonomy == "swarm" and _fc and cfg.swarm.members:
             from adapters.web import WebAdapter
             from core.swarm import build_swarm
 
             app.state.agent = build_swarm(
-                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals)
+                cfg, _llm, _memory, WebAdapter(cfg.web), approval=app.state.approvals,
+                simulator=app.state.simulator)
         elif cfg.agent.autonomy == "tools" and _fc:
             from adapters.web import WebAdapter
             from core.tool_agent import ToolAgent
@@ -114,7 +121,8 @@ def create_app(
 
             app.state.agent = ToolAgent(
                 _llm, _memory, cfg, approval=app.state.approvals,
-                tools=build_toolbox(cfg, _memory, WebAdapter(cfg.web)))
+                tools=build_toolbox(cfg, _memory, WebAdapter(cfg.web)),
+                simulator=app.state.simulator)
         else:
             app.state.agent = MemoryAgent(_llm, _memory, cfg)
         if hasattr(app.state.agent, "set_retrieval_logger"):

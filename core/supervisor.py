@@ -35,7 +35,7 @@ def _worker_runner(worker: ToolAgent):
     return run
 
 
-def build_supervisor(config, llm, memory, web=None, approval=None) -> ToolAgent:
+def build_supervisor(config, llm, memory, web=None, approval=None, simulator=None) -> ToolAgent:
     """按 config.supervisor 组装协调者 ToolAgent(工具=各 worker 的 delegate 工具)。
     装配期 fail-fast 校验:worker 非空、名字唯一。"""
     specs = config.supervisor.workers
@@ -51,9 +51,9 @@ def build_supervisor(config, llm, memory, web=None, approval=None) -> ToolAgent:
         worker_tools = build_toolbox(config, memory, web, names=w.tools)
         worker = ToolAgent(llm, memory, config, approval=approval, tools=worker_tools,
                            profile=profile, persona=w.prompt or config.agent.system_prompt,
-                           write_back=False)                       # worker 不自动写回子任务
+                           write_back=False, simulator=simulator)   # worker 不自动写回子任务
         delegates.append(delegate_tool(w.name, _worker_runner(worker)))
 
     return ToolAgent(llm, memory, config, approval=approval, tools=delegates,
-                     profile=profile,
+                     profile=profile, simulator=simulator,
                      persona=config.supervisor.prompt or _DEFAULT_SUPERVISOR_PROMPT)

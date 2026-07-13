@@ -50,6 +50,7 @@ class PendingApproval:
     agent_id: str
     session_id: str
     reason: str
+    preview: str = ""    # M32:该动作若执行会造成什么(预执行模拟生成,供批准人看清后果)
     created_at: float = field(default_factory=time.time)
     _event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _decision: str = ""  # approved | rejected
@@ -60,7 +61,7 @@ class PendingApproval:
         return {
             "id": self.id, "action": self.action, "params": _summarize(self.params),
             "source": self.source, "agent_id": self.agent_id, "session_id": self.session_id,
-            "reason": self.reason, "created_at": self.created_at,
+            "reason": self.reason, "preview": self.preview, "created_at": self.created_at,
         }
 
 
@@ -161,8 +162,11 @@ class ApprovalQueue:
     async def gate(self, *, action: str, params: dict,
                    execute: Callable[[], Awaitable[Any]],
                    source: str = "user", agent_id: str = "", session_id: str = "",
-                   level_override: str | None = None) -> Any:
-        """按级别放行/入队/拒绝一次危险动作。返回 execute() 结果(auto/approved)。"""
+                   level_override: str | None = None, preview: str = "") -> Any:
+        """按级别放行/入队/拒绝一次危险动作。返回 execute() 结果(auto/approved)。
+
+        preview(M32):该动作若执行会造成什么的预演描述。confirm 时随待批项/通知呈给
+        人类批准者(把"盲批"升级为"看清后果再批"),并记入审计。"""
         # M30:令牌越权/过期/金额非法 与 来源不可信 属**硬约束**,先于 level_override 判定,
         # deny 优先(安全工具的 auto 也绕不过——与"显式 deny 盖过 auto"同一不变量)。预算不在
         # 此处判(避免 check→execute 之间的 TOCTOU),而在放行后**原子预留**。
@@ -180,10 +184,13 @@ class ApprovalQueue:
             level, reason = self.classify(action, params)
 
         async def _audit(decision: str, result: Any = None, cost: float = 0.0) -> None:
+            extra = {"reason": reason}
+            if preview:
+                extra["preview"] = preview
             await self._audit.record(
                 action=action, level=level, decision=decision, source=source,
                 agent_id=agent_id, session_id=session_id, params=params,
-                result=result, cost_usd=cost, extra={"reason": reason},
+                result=result, cost_usd=cost, extra=extra,
             )
 
         if level == "deny":
@@ -210,12 +217,13 @@ class ApprovalQueue:
             if level == "confirm":
                 pa = PendingApproval(id=uuid.uuid4().hex, action=action, params=params,
                                      source=source, agent_id=agent_id, session_id=session_id,
-                                     reason=reason)
+                                     reason=reason, preview=preview)
                 async with self._lock:
                     self._pending[pa.id] = pa
                 if self._notifier:
+                    effect = f";预计后果:{preview}" if preview else ""
                     await self._notifier.notify(
-                        f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}")
+                        f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}{effect}")
                 try:
                     await asyncio.wait_for(pa._event.wait(), timeout=self._settings.timeout_s)
                 except asyncio.TimeoutError:

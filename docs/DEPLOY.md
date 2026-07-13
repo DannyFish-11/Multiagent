@@ -1,6 +1,6 @@
 # 部署清单(交给任何人也能稳定跑)
 
-一页照做即可。先 `memory-agent doctor` 体检,全绿再上。
+一页照做即可。先 `make doctor` 体检,全绿再上。
 
 ## 0. 最小需求
 
@@ -12,9 +12,10 @@
 
 ```bash
 git clone <repo> && cd multiagent
-make install                 # uv sync
+make install                 # uv sync --group dev
 make setup                   # 首次运行向导:选 LLM/嵌入/预算 → 写 .env(密钥只落 .env)
-memory-agent doctor          # 体检:有 ❌ 就按提示修,全绿再继续
+make doctor                  # 体检(= uv run memory-agent doctor):有 ❌ 就按提示修,全绿再继续
+# 想用裸 `memory-agent` 命令:先 `uv tool install .` 或 `pipx install .` 装到 PATH
 ```
 
 ## 2. 起
@@ -31,7 +32,7 @@ make quickstart
 
 ## 3. 稳定运行(生产)
 
-- **进程守护**:docker `restart: unless-stopped`(compose 已配)或 systemd;`/healthz` 已内置健康检查,失败会分层指明哪层(不静默降级)。
+- **进程守护**:自行在 `docker-compose.yaml` 每个服务加 `restart: unless-stopped`(当前 compose 未配),或用 systemd;`/healthz` 已由镜像内置 `HEALTHCHECK` 探活,失败会分层指明哪层(不静默降级)。
 - **成本硬闸**:`.env` 的 `MEMORY_AGENT_BUDGET__DAILY_USD` 是真实拦截,先设小值试水。
 - **并发**:`concurrency.max_concurrent_llm_calls` 防限流雪崩;高并发把向量库换成服务端 Qdrant(`vectordb.mode=server`)。
 
@@ -55,9 +56,23 @@ make quickstart
 | 可观测性看板 | `observability.enabled=true` | `uv sync --extra observability` + `make observability-up` |
 | 本地嵌入(离线语义) | `embedder.backend=local` | `uv sync --extra local-embed`(重,需 GPU 更佳) |
 | 上网 / Gmail / 支付 | 见 `config.yaml` 各段 | 供应商 key 由你填 |
+| 作用域授权令牌(给自主运行套临时工牌) | `delegation.enabled=true`(默认关) | 无需额外装 |
+
+## 5.1 默认已开的安全闸(零成本、零额外依赖)
+
+危险动作的守门人默认就位,无需配置即生效——部署时了解即可:
+
+- **审批中枢**(`approval`):auto/confirm/deny + 全量审计(`logs/audit.jsonl`)。默认无规则命中走
+  `confirm`(保守);上网/付款/发信等按 `approval.policies` 分级。
+- **预执行模拟**(`simulation`,M32,**默认开**):危险动作执行前先校验参数 + 生成效果预览随 confirm
+  呈给批准人。LLM 增强(语义校验/预览)默认关。
+- **提示词注入检测**(`injection`,M33,**默认开**):网页等不可信内容进模型前扫描注入特征,分级
+  标注/屏蔽/拦截。硬拦策略 `injection.on_detect=block` 需显式选。LLM 二次分类默认关。
+- **支付笼子 + 来源闸**(`payments`,M12,默认 `enabled=false` 拒付):启用后单笔/日/月三层限额 +
+  仅人类会话可发起。
 
 ## 6. 升级 / 排障
 
-- 升级:`git pull && make install && memory-agent doctor && make test`。
-- 排障:`docker compose logs memory-api`;`memory-agent doctor` 复检;任一依赖不可达时 `/healthz` 指明层号(`[L0/…]`/`[L1/…]`/`[L2/…]`)。
+- 升级:`git pull && make install && make doctor && make test`。
+- 排障:`docker compose logs memory-api`;`make doctor` 复检;任一依赖不可达时 `/healthz` 指明层号(`[L0/…]`/`[L1/…]`/`[L2/…]`)。
 - 磁盘满:清 `./data/qdrant` 缓存或换盘;删旧快照 `experiments/snapshots/`。

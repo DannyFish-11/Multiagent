@@ -23,6 +23,11 @@
 - 新增 `config.injection` 配置段。测试 `tests/test_m33_injection.py` 15 例:红队语料判级
   (10 条 payload 全捕获)、良性对照零误报(6 条)、三种处置策略、LLM 分类与 fail-open、
   WebAdapter 接入与向后兼容。**346 passed / 10 skipped**,ruff 全绿。
+- **文档全量对齐实际状态**:README 补全自主编排三形态(M22/M24/M25)、治理与安全栈
+  (M30/M32/M33)、PHASE 4 与 PHASE 6+(M20–M33)里程碑;修正"支付能力暂不实现"这一与 M12
+  矛盾的表述。`docs/payments-assessment.md` 改为"M12 已实现"并归档 PHASE 2 评估。
+  `docs/DEPLOY.md` 修正 `restart` 策略误述、`make install`/`make doctor` 命令、补默认已开的
+  安全闸清单。`docs/QUICKSTART.md`/`docs/RUN.md` 校准安装命令与 draft release 说明。
 
 ## 0.13.0 — M32 Gecko-lite 预执行模拟(危险动作真实执行前先"预演")
 

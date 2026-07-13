@@ -30,7 +30,7 @@ make chat            # 起来后,在终端里直接和它对话
 需要:一把云端 LLM key(+ 可选 Jina key)。向量库用进程内落盘文件,不起 Qdrant。
 
 ```bash
-make install         # uv sync
+make install         # uv sync --group dev
 make setup           # 向导:LLM/嵌入/预算 → 写 .env(运行方式选「本地进程」)
 make run-api         # 起 L3 API(:8002);自动读 .env
 make chat            # 另开终端对话

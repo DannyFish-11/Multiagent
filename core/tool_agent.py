@@ -27,11 +27,12 @@ def _positive_or(value, default: int) -> int:
 
 class ToolAgent:
     def __init__(self, llm, memory, config, approval=None, tools=None, profile=None,
-                 persona=None, write_back=True) -> None:
+                 persona=None, write_back=True, simulator=None) -> None:
         self._llm = llm
         self._memory = memory
         self._config = config
         self._approval = approval
+        self._simulator = simulator        # M32:预执行模拟(参数校验 + 效果预览);None → 不启用
         self._tools = {t.name: t for t in (tools or [])}
         # persona:覆盖基础系统提示(M25 supervisor 的 worker 各有人设);None → 用 config
         self._persona = persona or config.agent.system_prompt
@@ -71,13 +72,24 @@ class ToolAgent:
             return text[:n] + f"\n…[结果已截断,原 {len(text)} 字符]"
         return text
 
-    async def _exec_tool(self, call, session_id: str) -> str:
+    async def _exec_tool(self, call, session_id: str, task: str = "") -> str:
         tool = self._tools.get(call.name)
         if tool is None:
             return f"未知工具:{call.name}"
         from core.tools import sanitize_tool_args
 
         args = sanitize_tool_args(call.arguments)   # M30:剥除 LLM 自称的 _source
+
+        # M32 预执行模拟:执行前先校验参数、生成效果预览(side-effect-free)。参数不合法则
+        # **不执行、不入审批**,把纠错反馈回灌 LLM(它下一步自行修正,而非真实试错)。
+        effect = ""
+        if self._simulator is not None:
+            assessment = await self._simulator.assess(tool, args, task=task)
+            if not assessment.ok:
+                logger.info("工具 %s 参数校验未通过:%s", call.name, assessment.reason)
+                return (f"[参数校验未通过:{assessment.reason}。"
+                        "请据此修正参数后重试,不要原样重复调用。]")
+            effect = assessment.effect
 
         async def _do():
             return await tool.run(args)
@@ -87,7 +99,7 @@ class ToolAgent:
                 return await self._approval.gate(
                     action=tool.action or tool.name, params=args, execute=_do,
                     source="user", agent_id="", session_id=session_id,
-                    level_override="auto" if tool.safe else None)
+                    level_override="auto" if tool.safe else None, preview=effect)
             return await _do()
         except Exception as exc:                       # 被拒/超时/执行错误 → 回灌给 LLM,不崩
             logger.info("工具 %s 未完成:%s", call.name, exc)
@@ -135,7 +147,7 @@ class ToolAgent:
             for i, c in enumerate(calls):
                 kind = "delegate" if c.name.startswith("delegate_to_") else "tool"
                 yield {"type": "step", "kind": kind, "name": c.name, "status": "start"}
-                result = self._clip(await self._exec_tool(c, session_id))
+                result = self._clip(await self._exec_tool(c, session_id, task=message))
                 used_tools.append(c.name)
                 messages.append({"role": "tool", "tool_call_id": cids[i], "name": c.name,
                                  "content": result})

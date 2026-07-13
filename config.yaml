@@ -152,6 +152,12 @@ approval:  # M9.2 审批中枢(无 Omnigent 形态的危险动作守门人)
   require_verified_source: []        # 如 [payment, web_submit, gmail_send]
   trusted_sources: [erp_verified, verified, system, user]
 
+simulation:  # M32 Gecko-lite 预执行模拟:危险动作真实执行前先做参数校验 + 效果预览
+  enabled: true                      # 规则层参数校验 + 效果预览(确定性、零成本,默认开)
+  semantic_validation: false         # LLM 语义参数校验(schema 合法但语义不对):需 LLM、有成本
+  llm_preview: false                 # 工具无自报预览时用 LLM 估计副作用:需 LLM,预览标注"估计"
+  preview_max_chars: 500
+
 delegation:  # M30 ① 作用域授权令牌(默认关;开启由 agent 身份签发,审批闸强制其范围)
   enabled: false
   task: ""                           # 任务描述(审计可读)

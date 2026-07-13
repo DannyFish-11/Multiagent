@@ -2,6 +2,21 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.14.1 — 支付来源闸默认硬化(payment 默认走 provenance,fail-closed)
+
+修一处**默认休眠的安全闸**:M30 的 `_source` provenance 是防"LLM 决定的支付"的真正防线
+(工具循环把审批闸的 `source` 硬编码成会话级 "user",挡不住动作级意图;LLM 自称的 `_source`
+进闸前被 `sanitize_tool_args` 剥除),但它此前默认关(`require_verified_source: []`)——一旦
+支付工具接到 agent 就会形同虚设。
+
+- **出厂 `config.yaml` 默认把 `payment*` 纳入 `require_verified_source`**:LLM 发起的支付因无
+  可信 `_source` 而 **fail-closed 被拒**,不靠算子记得配。
+- **刻意只纳入 payment**:`gmail_send`/`web_submit` 在用户会话里合法可由 LLM 调,且循环从不注入
+  `_source`,列进来会被永久硬拒——那两类由审批 `confirm` 挡,不由 provenance 挡。
+- 回归测试 `tests/test_m30b_payment_provenance.py` 4 例(对**真实出厂 config**):payment 默认命中
+  provenance、无 `_source` fail-closed、可信 `_source` 放行、LLM 自称 `_source` 被剥除后仍被拒。
+  未改 `ApprovalSettings` 模型默认(`[]`),对既有直接构造 settings 的测试零影响。**350 passed / 10 skipped**。
+
 ## 0.14.0 — M33 提示词注入检测硬化(主动扫描不可信内容 + 红队语料)
 
 对标 YC Demo Day #8"Agent 安全防御基础设施",但**只做防御性检测,坚决不碰其"自主重训

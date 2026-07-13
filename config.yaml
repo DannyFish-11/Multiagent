@@ -148,8 +148,11 @@ approval:  # M9.2 审批中枢(无 Omnigent 形态的危险动作守门人)
     - {action: "payment", when: {amount_usd__gte: 1.0}, level: confirm, reason: "≥$1 需确认"}
     - {action: "payment", when: {}, level: auto}
   # M30 ② 来源可信闸:这些动作(fnmatch)必须依据可信来源数据,否则 deny(先于分级,deny 优先)。
-  # 例:付款/发信须依据可验证数据,LLM 臆造的值(_source=llm_output 或缺失)不得触发。
-  require_verified_source: []        # 如 [payment, web_submit, gmail_send]
+  # 例:付款须依据可验证数据,LLM 臆造/自称的 _source(进闸前被 sanitize 剥除)不得触发。
+  # 默认把 payment* 纳入:一旦支付工具接到 agent,LLM 发起的调用因无可信 _source **fail-closed**,
+  # 不靠算子记得配。**不**默认纳入 gmail_send/web_submit——它们在用户会话里合法可由 LLM 调,
+  # 且循环从不注入 _source,列进来会被永久硬拒;那两类由审批 confirm 挡,不由 provenance 挡。
+  require_verified_source: [payment*]   # 追加 web_submit/gmail_send 前先确认有可信上游注入 _source
   trusted_sources: [erp_verified, verified, system, user]
 
 simulation:  # M32 Gecko-lite 预执行模拟:危险动作真实执行前先做参数校验 + 效果预览

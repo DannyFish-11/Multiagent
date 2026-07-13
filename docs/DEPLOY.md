@@ -69,7 +69,8 @@ make quickstart
 - **提示词注入检测**(`injection`,M33,**默认开**):网页等不可信内容进模型前扫描注入特征,分级
   标注/屏蔽/拦截。硬拦策略 `injection.on_detect=block` 需显式选。LLM 二次分类默认关。
 - **支付笼子 + 来源闸**(`payments`,M12,默认 `enabled=false` 拒付):启用后单笔/日/月三层限额 +
-  仅人类会话可发起。
+  仅人类会话可发起。**来源可信闸(M30)出厂默认已把 `payment*` 纳入 `require_verified_source`**:
+  即便支付工具接到 agent,LLM 发起(无可信 `_source`)的支付也 fail-closed 被拒。
 
 ## 6. 升级 / 排障
 

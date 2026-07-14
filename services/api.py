@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import logging
 
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from adapters.a2a import build_signed_card
@@ -70,6 +70,13 @@ def create_app(
         # M5 身份(终身不变;记忆库随 agent_id 绑定)
         app.state.identity = AgentIdentity.load_or_create(cfg.identity.dir)
         app.state.signed_card = build_signed_card(app.state.identity, cfg.a2a.base_url)
+        # M5.2 入站 A2A:点亮联邦入口——受理外部 agent 的**签名意图信封**(委托检索类任务)。
+        # 用 handle_task(传输无关、不依赖 a2a-sdk):验签信封 → 校验白名单信任 → 仅回 shared 记忆。
+        from adapters.a2a import A2AServerAdapter
+        from core.trust import TrustStore
+
+        app.state.a2a_server = A2AServerAdapter(
+            app.state.identity, _memory, TrustStore(_memory), cfg.a2a.base_url)
         # M8 埋点
         app.state.retrieval_logger = RetrievalLogger(cfg.metabolism.events_path)
         # M9 审批中枢(无 Omnigent 形态的危险动作守门人;工具循环的每次工具调用经此闸)
@@ -281,6 +288,27 @@ def create_app(
     async def identity_card():
         """签名 Agent Card(M5.2;A2AClientAdapter.fetch_and_verify_card 消费)。"""
         return app.state.signed_card
+
+    @app.post("/a2a/tasks")
+    async def a2a_task(req: dict = Body(...)):
+        """入站 A2A 委托(M5.2 点亮):受理外部 agent 的**签名意图信封**。
+
+        安全:调用方身份**只从验签通过的信封**里取(`identity.agent_id`),绝不信明文声称的
+        `from_agent_id`——无信封/验签失败一律按未认证处理(→ 需人工批准/加白)。仅回
+        visibility=shared 的记忆,私有绝不外泄;chat 类改动性委托被拒。响应为本方签名信封。"""
+        from core.identity import verify_envelope
+
+        server = app.state.a2a_server
+        is_env = isinstance(req, dict) and all(k in req for k in ("payload", "signature", "identity"))
+        envelope = req if is_env else None
+        payload = envelope["payload"] if is_env and isinstance(envelope.get("payload"), dict) else {}
+        # 身份只认验签信封:明文 from_agent_id 不可信,防"未签名请求冒名可信 agent"绕过
+        from_agent_id = None
+        if envelope is not None and verify_envelope(envelope):
+            from_agent_id = envelope.get("identity", {}).get("agent_id")
+        return await server.handle_task(
+            payload.get("skill", "memory_search"), payload.get("params", {}),
+            from_agent_id, envelope=envelope)
 
     @app.post("/memory/promote")
     async def memory_promote(req: PromoteRequest):

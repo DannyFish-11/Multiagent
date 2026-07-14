@@ -33,9 +33,13 @@ class TrustStore:
             {"kind": TRUST_KIND, "trusted_agent_id": agent_id, "visibility": "private"},
         )
 
+    def _has_dump_all(self) -> bool:
+        return hasattr(self._memory, "dump_all")
+
     async def _scan_entries(self) -> list[dict]:
-        """白名单判定必须精确:后端支持 dump_all 时全量扫描;否则退化为向量检索。"""
-        if hasattr(self._memory, "dump_all"):
+        """枚举白名单记忆。dump_all 后端全量精确;否则退化为**尽力**向量检索(仅 audit 用,
+        受 k 上限约束可能漏,不用于 is_trusted 判定——见 is_trusted 的精确 targeted 查找)。"""
+        if self._has_dump_all():
             points = await self._memory.dump_all()
             return [
                 {"memory_id": p["id"],
@@ -51,7 +55,20 @@ class TrustStore:
         ]
 
     async def is_trusted(self, agent_id: str) -> bool:
-        return any(e["agent_id"] == agent_id for e in await self._scan_entries())
+        """精确判定 agent_id 是否在白名单。
+
+        dump_all 后端:全量精确扫描 + meta 精确等值匹配。无 dump_all 后端:用**该 agent 条目的
+        原文**做 targeted 检索(query==存储文本,最大化召回该条),再按 `trusted_agent_id` meta
+        精确匹配——不再靠通用短语的相似度排序(那会漏排在 k 之外的条目)。始终精确等值判定,
+        绝不因相似度沾边而误信任(误判方向也 fail-closed:漏召回 → 视为未信任 → 需人工批准)。"""
+        if not agent_id:
+            return False
+        if self._has_dump_all():
+            return any(e["agent_id"] == agent_id for e in await self._scan_entries())
+        hits = await self._memory.search(
+            MultimodalInput.text(self._entry_text(agent_id)), k=50)
+        return any(h.meta.get("kind") == TRUST_KIND
+                   and h.meta.get("trusted_agent_id") == agent_id for h in hits)
 
     async def audit(self) -> list[dict]:
         """列出全部白名单记忆(可审计)。"""

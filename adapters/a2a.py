@@ -202,13 +202,17 @@ class A2AServerAdapter:
                         raise json.JSONDecodeError("not an object", text, 0)
                 except json.JSONDecodeError:
                     req = {"skill": "memory_search", "params": {"query": text}}
-                # 网络入口:合法请求须为**签名信封**;非信封/无签名一律按未认证处理(→ 需人工批准)
+                # 网络入口:合法请求须为**签名信封**;非信封/无签名一律按未认证处理(→ 需人工批准)。
+                # 身份只从**验签信封**取——明文 from_agent_id 不可信,防未签名请求冒名可信 agent。
                 is_env = all(k in req for k in ("payload", "signature", "identity"))
                 envelope = req if is_env else None
-                payload = req["payload"] if is_env and isinstance(req.get("payload"), dict) else req
+                payload = envelope["payload"] if is_env and isinstance(envelope.get("payload"), dict) else {}
+                from_agent_id = None
+                if envelope is not None and verify_envelope(envelope):
+                    from_agent_id = envelope.get("identity", {}).get("agent_id")
                 result = await adapter.handle_task(
                     payload.get("skill", "memory_search"), payload.get("params", {}),
-                    payload.get("from_agent_id"), envelope=envelope)
+                    from_agent_id, envelope=envelope)
                 await event_queue.enqueue_event(a2a_types.Message(
                     message_id=_uuid.uuid4().hex,
                     role=a2a_types.Role.ROLE_AGENT,

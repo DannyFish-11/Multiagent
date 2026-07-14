@@ -419,6 +419,14 @@ make run-mcp   # stdio;工具:memory_store / memory_search / memory_consolidate 
 FastAPI 与 MCP 同进程时经 `core.factory.get_shared_memory_store` 复用同一
 MemoryStore 实例;跨进程时经同一 Qdrant collection 共享持久状态。
 
+## 入站 A2A(联邦入口)
+
+- `GET /identity/card` —— 发布本方签名 Agent Card(`A2AClientAdapter.fetch_and_verify_card` 消费)。
+- `POST /a2a/tasks` —— 受理外部 agent 的**签名意图信封**(委托检索类任务)。身份**只从验签通过的
+  信封**里取(明文声称的 `from_agent_id` 不可信,防冒名);经白名单信任校验;**仅回
+  visibility=shared 的记忆**(私有绝不外泄),chat 类改动性委托被拒。响应为本方签名信封。
+  该口不依赖 `a2a-sdk`(用传输无关的 `handle_task`);装 `--extra a2a` 后另可经其 JSONRPC 栈提供。
+
 ## 支付能力(M12 已实现,默认拒付)
 
 PHASE 2 时按附录 A 评估为"预留接口"(记录见 `docs/payments-assessment.md`);PHASE 3 **M12

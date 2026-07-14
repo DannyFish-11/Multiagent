@@ -94,8 +94,29 @@ def issue(identity: AgentIdentity, *, task: str, permissions, max_budget_usd: fl
 
 def verify(token: DelegationToken, *, public_key: str | None = None,
            now: float | None = None) -> bool:
-    """验签 + 时效。签名无效或已过期均返回 False(不抛)。"""
+    """验签 + 时效。签名无效或已过期均返回 False(不抛)。
+
+    ⚠️ 默认(public_key=None)用令牌**自带**的 public_key 验签——只证"被所附密钥签过",
+    **不证"被可信签发者签过"**。对**外部传入**的令牌绝不能这样用(等于自证):必须传入
+    已知签发者的 public_key(pinning),或改用 `verify_issued_by(token, identity)`。"""
     pub = public_key or token.public_key
     if not verify_signature(token.payload(), token.protected, token.signature, pub):
         return False
     return not token.expired(now)
+
+
+def verify_issued_by(token: DelegationToken, identity: "AgentIdentity",
+                     now: float | None = None) -> bool:
+    """严格校验:令牌确由 `identity` 签发(**签发者绑定**,防外部令牌自证)。
+
+    pin 到 identity 的公钥与 agent_id:除验签 + 时效外,还要求
+      - token.public_key == identity 的公钥(用**可信**公钥验签,而非令牌自带的);
+      - token.agent_id == identity.agent_id 且 token.issuer == identity.agent_id
+        (签发者/绑定主体一致,杜绝"换个 issuer 字段但用别的密钥签"的混淆)。
+    任一不符返回 False(不抛)。接收外部/A2A 传入的委派令牌时应走此函数,不用裸 verify()。"""
+    expected_pub = identity.public_key_b64()
+    if token.public_key != expected_pub:
+        return False
+    if token.agent_id != identity.agent_id or token.issuer != identity.agent_id:
+        return False
+    return verify(token, public_key=expected_pub, now=now)

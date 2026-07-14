@@ -31,9 +31,10 @@ class AuditLog:
         self._lock = asyncio.Lock()
 
     async def record(self, *, action: str, level: str, decision: str,
-                     agent_id: str = "", session_id: str = "", source: str = "user",
+                     agent_id: str = "", session_id: str = "", source: str = "unknown",
                      params: Any = None, result: Any = None,
                      cost_usd: float = 0.0, extra: dict | None = None) -> dict:
+        # source 默认 "unknown"(非 "user"):忘传来源不应被静默标成"人类发起"这一特权值。
         entry = {
             "ts": time.time(),
             "agent_id": agent_id,

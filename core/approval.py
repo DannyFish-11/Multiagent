@@ -161,7 +161,7 @@ class ApprovalQueue:
 
     async def gate(self, *, action: str, params: dict,
                    execute: Callable[[], Awaitable[Any]],
-                   source: str = "user", agent_id: str = "", session_id: str = "",
+                   source: str = "unknown", agent_id: str = "", session_id: str = "",
                    level_override: str | None = None, preview: str = "") -> Any:
         """按级别放行/入队/拒绝一次危险动作。返回 execute() 结果(auto/approved)。
 

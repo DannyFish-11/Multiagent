@@ -2,6 +2,47 @@
 
 本项目遵循分阶段交付。以下为面向"完整、稳定、易用、可交付"的近期迭代。
 
+## 0.15.0 — 外层联邦/信任/令牌硬化 + 入站 A2A 点亮(对外审计 #22/#24/#25/#26)
+
+针对一份外部审计逐条排查修复:
+
+- **#22 入站 A2A 签名意图路由(点亮联邦入口)**:`services/api.py` 新增 `POST /a2a/tasks`,受理
+  外部 agent 的**签名意图信封**(委托检索类任务)。复用传输无关、**不依赖 a2a-sdk** 的
+  `A2AServerAdapter.handle_task`:验签信封 → 校验白名单信任 → **仅回 visibility=shared 的记忆**
+  (私有绝不外泄),chat 类改动性委托被拒。此前 `services/api.py` 只发签名卡片、无入站受理口。
+- **发现并修复冒名漏洞**:点亮入站时发现网络入口(新路由 + a2a-sdk 执行器)会honor**明文声称**的
+  `from_agent_id`——未签名请求冒名一个可信 agent_id 即可绕过验签。修复:身份**只从验签通过的
+  信封**(`identity.agent_id`)取,无信封/验签失败一律未认证 → 需人工批准。回归测试锁定。
+- **#24 信任白名单精确查找**:无 `dump_all` 后端上,`is_trusted` 改用**该 agent 条目原文**做
+  targeted 检索(最大化召回)+ `trusted_agent_id` meta 精确等值匹配,不再靠通用短语相似度排序
+  (那会漏排在 k 外的条目)。始终精确判定,漏召回也 fail-closed(视为未信任 → 人工批准)。
+- **#25 委派令牌签发者绑定**:新增 `verify_issued_by(token, identity)`——pin 到已知身份的公钥 +
+  校验 `agent_id/issuer` 一致,杜绝"用自己密钥签、issuer 字段冒名"的自证。裸 `verify()` 的自证
+  语义在 docstring 显式警示,外部/A2A 传入令牌须走 `verify_issued_by`。
+- **#26 source 诚实默认**:审批闸 `gate()` 与 `AuditLog.record()` 的 `source` 默认由 `"user"` 改
+  `"unknown"`——忘传来源不再被静默标成"人类发起"这一特权值(`source` 仅审计标签,非鉴权输入;
+  鉴权走 `_source` provenance + 委派令牌 + 审批分级)。
+- **#23** 已由 0.14.1(payment 默认走 provenance)覆盖:支付工具即便接上,LLM 发起(无可信
+  `_source`)也 fail-closed。**#21** 的 conductor/email worker/payments 作为**运行时服务**接线
+  受真实外部停点约束(云供应商/Gmail OAuth/支付供应商开户),不在本次伪接线之列——入站 A2A
+  这一口已点亮,是联邦面从"潜在"转"活"的第一步。
+- 测试 `tests/test_m5b_federation_hardening.py` 8 例。**358 passed / 10 skipped**,ruff 全绿。
+
+## 0.14.1 — 支付来源闸默认硬化(payment 默认走 provenance,fail-closed)
+
+修一处**默认休眠的安全闸**:M30 的 `_source` provenance 是防"LLM 决定的支付"的真正防线
+(工具循环把审批闸的 `source` 硬编码成会话级 "user",挡不住动作级意图;LLM 自称的 `_source`
+进闸前被 `sanitize_tool_args` 剥除),但它此前默认关(`require_verified_source: []`)——一旦
+支付工具接到 agent 就会形同虚设。
+
+- **出厂 `config.yaml` 默认把 `payment*` 纳入 `require_verified_source`**:LLM 发起的支付因无
+  可信 `_source` 而 **fail-closed 被拒**,不靠算子记得配。
+- **刻意只纳入 payment**:`gmail_send`/`web_submit` 在用户会话里合法可由 LLM 调,且循环从不注入
+  `_source`,列进来会被永久硬拒——那两类由审批 `confirm` 挡,不由 provenance 挡。
+- 回归测试 `tests/test_m30b_payment_provenance.py` 4 例(对**真实出厂 config**):payment 默认命中
+  provenance、无 `_source` fail-closed、可信 `_source` 放行、LLM 自称 `_source` 被剥除后仍被拒。
+  未改 `ApprovalSettings` 模型默认(`[]`),对既有直接构造 settings 的测试零影响。**350 passed / 10 skipped**。
+
 ## 0.14.0 — M33 提示词注入检测硬化(主动扫描不可信内容 + 红队语料)
 
 对标 YC Demo Day #8"Agent 安全防御基础设施",但**只做防御性检测,坚决不碰其"自主重训

@@ -185,3 +185,32 @@ def test_endpoint_emits_error_event_on_failure():
         r = c.post("/chat/stream", json={"message": "q", "session_id": "s"})
         evs = _parse_sse(r.text)
         assert any(e["type"] == "error" and "kaboom" in e["message"] for e in evs)
+
+
+async def test_adapter_stream_duplicate_usage_blocks_billed_once(tmp_path):
+    """回归:部分 OpenAI 兼容网关在同一流里重复回传 usage 块。
+
+    修复前:每个 usage 块都 ledger.record → 同一笔 token 被计多次(双重记账,
+    日预算被虚耗)。修复后:同一流只按首个 usage 块记账一次;last_meta 仍取末块。
+    """
+    from adapters.cost_ledger import CostLedger
+    from adapters.llm import OpenAICompatAdapter
+
+    usage1 = {"prompt_tokens": 10, "completion_tokens": 4}
+    usage2 = {"prompt_tokens": 10, "completion_tokens": 4}   # 网关重复回传同一累计值
+    body = (b'data: {"choices":[{"delta":{"content":"a"}}]}\n\n'
+            + f'data: {json.dumps({"choices": [], "usage": usage1})}\n\n'.encode()
+            + f'data: {json.dumps({"choices": [], "usage": usage2})}\n\n'.encode()
+            + b'data: [DONE]\n\n')
+
+    ledger = CostLedger({}, 100.0, tmp_path / "ledger.json")
+    ad = OpenAICompatAdapter(
+        LLMRoleSettings(base_url="http://x/v1", api_key="k", model="m", stream_usage=True),
+        ledger=ledger, transport=httpx.MockTransport(lambda r: httpx.Response(200, content=body)))
+    pieces = [p async for p in ad.chat_stream([Message(role="user", content="hi")])]
+
+    assert pieces == ["a"]
+    entry = ledger.snapshot()["entries"]["http://x/v1::m"]
+    assert entry["prompt_tokens"] == 10        # 记账一次,而非 20
+    assert entry["completion_tokens"] == 4     # 而非 8
+    assert ad.last_meta["usage"] == usage2     # 元数据取末块(累计终值)

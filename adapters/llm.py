@@ -222,6 +222,7 @@ class OpenAICompatAdapter:
         # last_meta 立即刷新为本次流式调用,避免读到上一次非流式的陈旧值
         self.last_meta = {"endpoint": ep["base_url"], "model": ep["model"],
                           "usage": {}, "streamed": True}
+        usage_recorded = False  # 同一流只记账一次:部分兼容网关会在多个块里重复回传 usage
         async with self._client(idx).stream("POST", "/chat/completions", json=payload) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
@@ -244,11 +245,14 @@ class OpenAICompatAdapter:
                         yield piece
                 usage = chunk.get("usage")
                 if usage:
-                    self.last_meta["usage"] = usage
-                    if self._ledger is not None:
+                    self.last_meta["usage"] = usage   # 元数据取最新一块(末块为累计终值)
+                    if self._ledger is not None and not usage_recorded:
+                        # 记账只认首个 usage 块:重复块是同一调用同一累计值的重复回传,
+                        # 逐块 record 会把同一笔 token 计多次 → 虚耗日预算(双重记账)
                         self._ledger.record(ep["base_url"], ep["model"],
                                             int(usage.get("prompt_tokens", 0)),
                                             int(usage.get("completion_tokens", 0)))
+                        usage_recorded = True
 
     async def chat_tools(self, messages: list[dict], tools: list[dict], **kw: Any):
         """function-calling 一步:messages 为 OpenAI 格式 dict(含 tool/assistant.tool_calls),

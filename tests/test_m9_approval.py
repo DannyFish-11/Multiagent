@@ -79,6 +79,36 @@ async def test_confirm_timeout_cancels(tmp_path):
     assert q.list_pending() == []  # 超时后出队
 
 
+async def test_confirm_cancelled_dequeues(tmp_path):
+    """回归:等待人工批准期间任务被 cancel(客户端断连/停机)时,待批项必须出队——
+    否则孤儿项永久滞留 _pending(资源泄漏)。"""
+    q, _ = make_queue(tmp_path, default="confirm", timeout=30.0)
+    task = asyncio.create_task(
+        q.gate(action="gmail_send", params={}, execute=lambda: _exec()))
+    await asyncio.sleep(0.05)
+    assert len(q.list_pending()) == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert q.list_pending() == []
+
+
+async def test_confirm_notifier_error_dequeues(tmp_path):
+    """回归:notify 抛出非 HTTPError(如 webhook URL 非法)时,待批项同样必须出队。"""
+    settings = ApprovalSettings(
+        timeout_s=5.0, audit_path="", default_level="confirm", policies=[])
+    audit = AuditLog(str(tmp_path / "audit.jsonl"))
+
+    class _BadNotifier:
+        async def notify(self, _msg: str) -> None:
+            raise ValueError("bad webhook url")
+
+    q = ApprovalQueue(settings, audit, _BadNotifier())
+    with pytest.raises(ValueError, match="bad webhook url"):
+        await q.gate(action="gmail_send", params={}, execute=lambda: _exec())
+    assert q.list_pending() == []
+
+
 # ---------------------------------------------------------------- 声明式规则
 
 async def test_declarative_first_match_wins(tmp_path):

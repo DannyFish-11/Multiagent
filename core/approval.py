@@ -220,22 +220,24 @@ class ApprovalQueue:
                                      reason=reason, preview=preview)
                 async with self._lock:
                     self._pending[pa.id] = pa
-                if self._notifier:
-                    effect = f";预计后果:{preview}" if preview else ""
-                    await self._notifier.notify(
-                        f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}{effect}")
                 try:
-                    await asyncio.wait_for(pa._event.wait(), timeout=self._settings.timeout_s)
-                except asyncio.TimeoutError:
+                    if self._notifier:
+                        effect = f";预计后果:{preview}" if preview else ""
+                        await self._notifier.notify(
+                            f"[CONFIRM] 待批准动作 {action}(id={pa.id},来源={source}):{reason}{effect}")
+                    try:
+                        await asyncio.wait_for(pa._event.wait(), timeout=self._settings.timeout_s)
+                    except asyncio.TimeoutError:
+                        await _audit("timeout")
+                        raise ApprovalTimeout(action, self._settings.timeout_s) from None
+                    if pa._decision != "approved":
+                        await _audit("rejected")
+                        raise ApprovalDenied(action, "人工拒绝")
+                finally:
+                    # 任何结局都必须出队:获批/拒绝/超时,以及任务被 cancel(客户端断连/
+                    # 停机)或 notify 抛错——否则孤儿待批项永久滞留 _pending(资源泄漏)。
                     async with self._lock:
                         self._pending.pop(pa.id, None)
-                    await _audit("timeout")
-                    raise ApprovalTimeout(action, self._settings.timeout_s) from None
-                async with self._lock:
-                    self._pending.pop(pa.id, None)
-                if pa._decision != "approved":
-                    await _audit("rejected")
-                    raise ApprovalDenied(action, "人工拒绝")
                 # M30:等待期间令牌可能过期——批准后、执行前**重新校验**授权(不用陈旧授权执行)
                 if self._delegation is not None and self._delegation.expired():
                     await _audit("denied")

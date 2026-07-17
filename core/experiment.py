@@ -206,25 +206,35 @@ class ExperimentRunner:
             inst = (assign(task, instances) if assign
                     else instances[idx % len(instances)])
             result = await handler(inst, task)
-            self._records.append({
+            record = {
                 "task_id": task.task_id, "kind": task.kind,
-                "agent_id": inst.get("agent_id", ""), **result})
+                "agent_id": inst.get("agent_id", ""), **result}
+            self._records.append(record)
+            self._append_record(record)
             done_ids.add(task.task_id)
             self._append_done(task.task_id)
 
         return self._finalize()
 
+    def _all_records(self) -> list[dict]:
+        """全部历史记录:results.jsonl 逐任务落盘,续跑(新实例)时前期记录不丢。"""
+        p = self._out / "results.jsonl"
+        if not p.exists():
+            return list(self._records)
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
     def _finalize(self) -> dict:
+        records = self._all_records()
         csv_path = self._out / "results.csv"
         fields: list[str] = []
-        for r in self._records:
+        for r in records:
             for k in r:
                 if k not in fields:
                     fields.append(k)
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
-            w.writerows(self._records)
+            w.writerows(records)
         meta = {
             "experiment_id": self._cfg.experiment_id,
             "fingerprint": self._cfg.fingerprint(),
@@ -232,7 +242,7 @@ class ExperimentRunner:
             "model_tier": self._cfg.model_tier,
             "model_versions": self._model_versions,
             "population_size": len(self._cfg.population),
-            "tasks_completed": len(self._records),
+            "tasks_completed": len(records),
             "metrics_requested": self._cfg.metrics,
             "paused": self._paused,
             "experiment_usd": (self._ledger.experiment_usd(self._cfg.experiment_id)
@@ -265,6 +275,10 @@ class ExperimentRunner:
     def _append_done(self, task_id: str) -> None:
         with (self._out / "done.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps({"task_id": task_id}) + "\n")
+
+    def _append_record(self, record: dict) -> None:
+        with (self._out / "results.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _save_state(self, next_index: int) -> None:
         self._state_path.write_text(json.dumps({

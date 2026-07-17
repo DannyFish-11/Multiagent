@@ -28,6 +28,21 @@ import yaml
 from core.plugins import get_plugin, register
 
 
+def _read_jsonl_tolerant(p: Path) -> list[dict]:
+    """逐行解析系统追加写的 JSONL;崩溃残留的半行坏记录跳过(追加写非原子),
+    不因此拒读全量(与 audit.read_all / CostLedger 同一纪律)。
+    仅用于 results/done 等本进程自产日志;任务集等人工输入仍严格解析。"""
+    rows: list[dict] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
 # ---------------------------------------------------------------- 任务源
 
 @dataclass
@@ -221,7 +236,7 @@ class ExperimentRunner:
         p = self._out / "results.jsonl"
         if not p.exists():
             return list(self._records)
-        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return _read_jsonl_tolerant(p)
 
     def _finalize(self) -> dict:
         records = self._all_records()
@@ -270,7 +285,7 @@ class ExperimentRunner:
         p = self._out / "done.jsonl"
         if not p.exists():
             return set()
-        return {json.loads(l)["task_id"] for l in p.read_text(encoding="utf-8").splitlines() if l.strip()}
+        return {d["task_id"] for d in _read_jsonl_tolerant(p)}
 
     def _append_done(self, task_id: str) -> None:
         with (self._out / "done.jsonl").open("a", encoding="utf-8") as f:

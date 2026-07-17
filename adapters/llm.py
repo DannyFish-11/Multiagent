@@ -400,6 +400,10 @@ class ConcurrencyLimitedLLM:
     """LLMClient 装饰器(M9.1):信号量限制并发 LLM 调用,防 API 限流雪崩。
 
     包裹任意 LLMClient;不改被包裹者签名(adapter 红线:core 只见 LLMClient 协议)。
+    chat / chat_tools / chat_stream 全部计入同一信号量——工具循环(默认 autonomy)
+    与流式输出同样是真实 API 调用,经 __getattr__ 透传就会绕过限流。
+    chat_tools/chat_stream 仅在被包裹者支持时暴露(hasattr 语义与 inner 一致,
+    否则 echo/local 等无函数调用能力的后端会被误判为支持工具循环)。
     """
 
     def __init__(self, inner, max_concurrent: int) -> None:
@@ -407,6 +411,17 @@ class ConcurrencyLimitedLLM:
 
         self._inner = inner
         self._sem = _asyncio.Semaphore(max(1, max_concurrent))
+        if hasattr(inner, "chat_tools"):
+            async def chat_tools(messages, tools=None, **kw):
+                async with self._sem:
+                    return await inner.chat_tools(messages, tools=tools, **kw)
+            self.chat_tools = chat_tools
+        if hasattr(inner, "chat_stream"):
+            async def chat_stream(messages, **kw):
+                async with self._sem:
+                    async for chunk in inner.chat_stream(messages, **kw):
+                        yield chunk
+            self.chat_stream = chat_stream
 
     async def chat(self, messages, **kw):
         async with self._sem:

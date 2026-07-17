@@ -187,3 +187,107 @@ def test_uuid7_burst_uniqueness_and_ordering():
     assert len(set(ids)) == 20000
     ts = [uuid_mod.UUID(u).int >> 80 for u in ids]
     assert ts == sorted(ts)  # 同毫秒内前缀相同,跨毫秒单调不降
+
+
+async def test_concurrent_first_use_creates_collection_once(tmp_path):
+    """ensure_collection 竞态:exists→create 之间的 await 窗口(server 模式网络往返)
+    会让并发首用双双判定 not-exists 并重复建集合,后者报 "already exists"。
+    加锁后 N 路并发首用全部成功且集合只建一次。"""
+    from adapters.vectordb import QdrantAdapter
+
+    class SlowFakeClient:
+        """模拟 server 端:每次调用让出事件循环;重复建集合同真实 client 一样报错。"""
+
+        def __init__(self) -> None:
+            self.collections: dict[str, bool] = {}
+
+        async def collection_exists(self, name):
+            await asyncio.sleep(0)  # 网络往返让出 → 竞态窗口
+            return name in self.collections
+
+        async def create_collection(self, collection_name, vectors_config):
+            await asyncio.sleep(0)
+            if collection_name in self.collections:
+                raise ValueError(f"Collection {collection_name} already exists")
+            self.collections[collection_name] = True
+
+        async def get_collection(self, name):
+            class _Vec:
+                size = 8
+
+            class _Params:
+                vectors = _Vec()
+
+            class _Cfg:
+                params = _Params()
+
+            class _Info:
+                config = _Cfg()
+
+            await asyncio.sleep(0)
+            return _Info()
+
+    cfg = make_fake_config(tmp_path)
+    db = QdrantAdapter(cfg.vectordb, dim=8)
+    db._client = SlowFakeClient()  # 替换底层 client,仅测 ensure_collection 并发语义
+
+    results = await asyncio.gather(*[db.ensure_collection() for _ in range(8)],
+                                   return_exceptions=True)
+    assert not [r for r in results if isinstance(r, Exception)]
+    assert list(db._client.collections) == [db.collection]  # 只建一次
+
+
+async def test_llm_semaphore_covers_tools_and_stream():
+    """ConcurrencyLimitedLLM:chat_tools / chat_stream 必须同样计入信号量。
+
+    回归:此前只有 chat 被限流,工具循环(默认 autonomy=tools)与流式调用经
+    __getattr__ 透传绕过信号量;且不支持工具/流式的后端不得被误判为支持。
+    """
+    from types import SimpleNamespace
+
+    from adapters.llm import ConcurrencyLimitedLLM
+
+    class ProbeLLM:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+
+        async def _track(self, result):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return result
+
+        async def chat(self, messages, **kw):
+            return await self._track("ok")
+
+        async def chat_tools(self, messages, tools=None, **kw):
+            return await self._track(SimpleNamespace(content="ok", tool_calls=[]))
+
+        async def chat_stream(self, messages, **kw):
+            yield await self._track("chunk")
+
+        async def health(self):
+            return True
+
+    inner = ProbeLLM()
+    limited = ConcurrencyLimitedLLM(inner, 2)
+
+    async def via_tools():
+        return await limited.chat_tools([], tools=[])
+
+    async def via_stream():
+        return [c async for c in limited.chat_stream([])]
+
+    await asyncio.gather(*[via_tools() for _ in range(4)], *[via_stream() for _ in range(4)])
+    assert inner.max_active <= 2            # 工具/流式调用同样受限
+    assert await limited.health()           # 透传属性仍可用
+
+    class PlainLLM:
+        async def chat(self, messages, **kw):
+            return "ok"
+
+    plain = ConcurrencyLimitedLLM(PlainLLM(), 2)
+    assert not hasattr(plain, "chat_tools")   # 无工具能力的后端不得被误判
+    assert not hasattr(plain, "chat_stream")

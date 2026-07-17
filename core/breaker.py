@@ -22,6 +22,12 @@ class BreakerConfig:
     pause_wait_timeout_s: float = 86400.0        # 层一暂停后等待人类的超时(24h)
 
 
+# 明细只保留月窗口:day_total/month_total/日报的最长回看即 30 天,更老的条目
+# 对任何判据都不再贡献。不裁剪则长跑 conductor 的内存与 breaker.json 无界增长,
+# 且每次 record 全量重写 O(n)(总开销 O(n²))。
+_MONTH_WINDOW_S = 30 * 86400
+
+
 class GlobalBreaker:
     """层二全局熔断:跨所有实验的日/月总额度 + 单实验占比闸门。持久化挂 volume。"""
 
@@ -40,6 +46,9 @@ class GlobalBreaker:
         self._path.write_text(json.dumps(self._spend, ensure_ascii=False), encoding="utf-8")
 
     def record(self, experiment_id: str, usd: float, now: float) -> None:
+        cutoff = now - _MONTH_WINDOW_S
+        if any(s["ts"] < cutoff for s in self._spend):
+            self._spend = [s for s in self._spend if s["ts"] >= cutoff]
         self._spend.append({"experiment_id": experiment_id, "usd": usd, "ts": now})
         self._save()
 

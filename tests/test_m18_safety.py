@@ -193,3 +193,22 @@ def test_daily_digest(tmp_path):
     assert digest["queue_by_state"].get("queued") == 1
     assert digest["yesterday_spend"]["exp1"] == 3.0
     assert digest["global_day_total"] == 4.5
+
+
+def test_spend_ledger_pruned_to_month_window(tmp_path):
+    """回归:长跑 conductor 的 _spend 明细不得无界增长。
+
+    修复前:record 只增不裁,内存与 breaker.json 随时间无限膨胀,且每次
+    record 全量重写 O(n)。修复后:落笔前裁掉月窗口(30 天)之外的明细
+    (它们对 day_total/month_total/日报本就不再贡献),判据语义不变。
+    """
+    import json
+
+    breaker = GlobalBreaker(BreakerConfig(global_daily_usd=1000.0), tmp_path / "b.json")
+    now = 40 * 86400.0
+    breaker.record("old", 5.0, now=1.0)             # 40 天前,月窗口之外
+    breaker.record("recent", 2.0, now=now - 100)    # 窗口内(落笔时触发裁剪)
+    assert [s["experiment_id"] for s in breaker._spend] == ["recent"]
+    assert [s["experiment_id"] for s in json.loads((tmp_path / "b.json").read_text())] == ["recent"]
+    assert breaker.month_total(now) == 2.0          # 总额语义不变
+    assert breaker.day_total(now) == 2.0

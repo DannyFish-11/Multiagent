@@ -72,7 +72,11 @@ class RetrievalLogger:
         for line in self._path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            d = json.loads(line)
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                # 崩溃残留的半行坏记录:跳过,不拒读全量(见 audit.read_all 同条注释)
+                continue
             if d.get("kind") == "feedback":
                 ev = raw.get(d.get("event_id", ""))
                 if ev:

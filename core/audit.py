@@ -57,5 +57,14 @@ class AuditLog:
     def read_all(self) -> list[dict]:
         if not self._path.exists():
             return []
-        return [json.loads(line) for line in self._path.read_text(encoding="utf-8").splitlines()
-                if line.strip()]
+        entries: list[dict] = []
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                # 追加写非原子:进程在写一行途中被杀会留下半行坏记录。
+                # 宁可少记一条,不可因此拒读全部(与 CostLedger 同一纪律)。
+                continue
+        return entries

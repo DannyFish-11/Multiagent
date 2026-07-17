@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from adapters.a2a import build_signed_card
 from adapters.embedder import RemoteEmbedderAdapter, build_embedder
-from adapters.llm import build_ledger, build_llm_client
+from adapters.llm import ConcurrencyLimitedLLM, build_ledger, build_llm_client
 from core.agent import MemoryAgent
 from core.identity import AgentIdentity
 from core.metabolism import RetrievalLogger
@@ -49,7 +49,11 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         _ledger = build_ledger(cfg)
-        _llm = llm or build_llm_client(cfg, role="chat", ledger=_ledger)
+        # M9.1:LLM 并发信号量(防 API 限流雪崩)——与 core.factory.build_llm 同一装配约定;
+        # 本服务是真实并发入口,不能只包 factory 路径。外部注入的 llm(测试)原样使用。
+        _llm = llm or ConcurrencyLimitedLLM(
+            build_llm_client(cfg, role="chat", ledger=_ledger),
+            cfg.concurrency.max_concurrent_llm_calls)
         if cfg.embedder.backend == "remote":
             _embedder = RemoteEmbedderAdapter(cfg.embedder.base_url, cfg.embedder.effective_dim)
         else:

@@ -170,6 +170,33 @@ async def test_budget_burn_pauses_and_resumes(tmp_path):
     assert len(done) == 50
 
 
+async def test_resume_results_csv_contains_full_history(tmp_path):
+    """烧穿暂停 → 新 runner 续跑:results.csv 与 tasks_completed 必须含前期记录。
+
+    回归:此前 records 只存内存,续跑实例的 CSV 只剩续跑段,前期记录静默丢失。
+    """
+    cfg = ExperimentConfig.from_yaml(SMOKE_YAML)
+    cfg.stop = {"max_tasks": 50, "budget_usd": 0.10}
+    ledger = CostLedger({"m": {"input": 1.0, "output": 0.0}}, 1e9, tmp_path / "l.json")
+    runner = ExperimentRunner(cfg, tmp_path / "exp", ledger=ledger)
+
+    async def handler(inst, task):
+        ledger.record("ep", "m", 50_000, experiment_id=cfg.experiment_id)
+        return {"success": True, "cost_usd": 0.05}
+
+    with pytest.raises(BudgetExhausted):
+        await runner.run(handler)
+
+    cfg.stop["budget_usd"] = 100.0
+    runner2 = ExperimentRunner(cfg, tmp_path / "exp", ledger=ledger)
+    result = await runner2.run(handler)
+
+    rows = list(csv_rows(result["csv"]))
+    assert len(rows) == 50                               # 前期记录不丢
+    assert result["metadata"]["tasks_completed"] == 50   # 计数为全量
+    assert len({r["task_id"] for r in rows}) == 50       # 无重复行
+
+
 def csv_rows(path):
     import csv as _csv
 

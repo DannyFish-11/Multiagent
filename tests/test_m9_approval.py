@@ -248,3 +248,17 @@ async def test_approvals_endpoints(tmp_path):
             audit = (await client.get("/audit")).json()
             assert any(e["decision"] == "approved" for e in audit["entries"])
             assert (await client.post("/approvals/nonexistent/approve")).status_code == 404
+
+
+async def test_audit_read_all_tolerates_corrupt_line(tmp_path):
+    """回归:崩溃残留的半行审计不得让 read_all(/audit 端点)整体拒读。
+
+    追加写非原子:进程在写一行途中被杀会留下半行坏记录。修复前 read_all
+    逐行 json.loads,一行坏 → JSONDecodeError,/audit 端点 500。
+    """
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    await audit.record(action="a", level="auto", decision="executed", agent_id="x", params={})
+    with (tmp_path / "audit.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"ts": 123, "action": "b')   # 崩溃残留的半行
+    entries = audit.read_all()
+    assert [e["action"] for e in entries] == ["a"]   # 坏行跳过,真记录不丢

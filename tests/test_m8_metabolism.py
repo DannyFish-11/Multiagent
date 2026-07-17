@@ -144,3 +144,18 @@ async def test_m8_zero_evidence_gives_no_suggestion(tmp_path):
     assert report["events_usable"] == 0
     assert report["recommended_k"] == 5  # 维持现状
     assert "不给出建议" in report["config_diff"]
+
+
+def test_load_events_tolerates_corrupt_trailing_line(tmp_path):
+    """回归:崩溃残留的半行检索日志不得拒读全量(与 audit.read_all 同条纪律)。
+
+    修复前 load_events 逐行 json.loads,一行坏 → run_metabolism 整体
+    JSONDecodeError。
+    """
+    path = tmp_path / "events.jsonl"
+    logger = RetrievalLogger(path)
+    logger.log(RetrievalEvent(query="q1", hit_ids=["a"], adopted_ids=["a"], event_id="e1"))
+    with path.open("a", encoding="utf-8") as f:
+        f.write('{"kind": "retrieval", "query": "q2')   # 崩溃半行
+    events = logger.load_events()
+    assert [e.event_id for e in events] == ["e1"]

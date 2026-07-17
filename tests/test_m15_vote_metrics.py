@@ -66,6 +66,17 @@ async def test_llm_voter_parses_json():
     assert accept is True and reason == "客观知识"
 
 
+async def test_vote_empty_electorate_fails_closed():
+    """回归:空投票团在 supermajority/weighted 下不得 fail-open。
+
+    修复前:n=0 时 accepts(0) >= n*ratio(0) 恒真 → 空投票团裁决 promote,
+    准入闸形同虚设。修复后:无票可记一律 reject(与 default_level=confirm
+    同一条"无凭据时保守"不变量)。
+    """
+    for rule in ("supermajority", "weighted", "simple_majority"):
+        assert await VotePolicy([], rule=rule).decide("x", {}) == "reject"
+
+
 # ---------------------------------------------------------------- commons metrics(M13 原语)
 
 def test_commons_cite_report_demote(tmp_path):

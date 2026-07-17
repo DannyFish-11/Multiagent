@@ -133,7 +133,11 @@ class VotePolicy:
                     agent_id=getattr(voter, "agent_id", ""), params={"content": content},
                     extra={"reason": reason})
         n = len(self._voters)
-        if self._rule == "supermajority":
+        if n == 0:
+            # 空投票团不得放行:supermajority/weighted 下 0 >= 0*ratio 恒真,会
+            # fail-open 成 promote(准入闸形同虚设)。无票可记一律保守 reject。
+            passed = False
+        elif self._rule == "supermajority":
             passed = accepts >= n * self._ratio
         elif self._rule == "weighted":
             passed = accepts >= n * self._ratio  # 权重表未配时等同 supermajority

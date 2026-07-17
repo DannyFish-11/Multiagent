@@ -50,6 +50,18 @@ async def test_batching_splits_by_limit():
     assert len(vectors) == 7 and all(len(v) == 8 for v in vectors)
 
 
+async def test_batch_count_mismatch_rejected():
+    """回归:API 批量返回条数与请求不一致时显式拒绝,不静默错位。
+
+    修复前:返回少于请求时 vectors 静默变短,下游按位置配对即张冠李戴。
+    修复后:条数不符直接 LayerError(与维度守卫同一"显式拒绝"纪律)。
+    """
+    adapter = JinaAPIAdapter(settings(batch=10),
+                             transport=httpx.MockTransport(lambda r: embed_response(1)))
+    with pytest.raises(LayerError, match="条数不符"):
+        await adapter.embed([MultimodalInput.text("t0"), MultimodalInput.text("t1")])
+
+
 # ---------------------------------------------------------------- 模态能力
 
 async def test_audio_raises_unsupported_modality():

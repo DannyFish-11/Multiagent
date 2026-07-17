@@ -277,7 +277,16 @@ class JinaAPIAdapter:
                 self._ledger.record(self.API_URL, model,
                                     int(usage.get("total_tokens",
                                                   usage.get("prompt_tokens", 0))))
-            vectors.extend(truncate_and_normalize(d["embedding"], None) for d in data["data"])
+            returned = data.get("data")
+            if not isinstance(returned, list) or len(returned) != len(batch):
+                # 条数不符(API 部分失败/响应异常)时静默继续,会让向量与输入错位
+                # (下游 zip 张冠李戴)——显式拒绝,不静默降级(全项目纪律)。
+                raise LayerError(
+                    "L1", "jina-api",
+                    f"批量返回条数不符:请求 {len(batch)} 条,返回 "
+                    f"{len(returned) if isinstance(returned, list) else type(returned).__name__}",
+                )
+            vectors.extend(truncate_and_normalize(d["embedding"], None) for d in returned)
         for v in vectors:
             if len(v) != self._dim:
                 raise LayerError(

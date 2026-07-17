@@ -202,3 +202,40 @@ def csv_rows(path):
 
     with open(path, encoding="utf-8") as f:
         return list(_csv.DictReader(f))
+
+
+async def test_resume_tolerates_corrupt_trailing_jsonl_line(tmp_path):
+    """回归:崩溃残留的半行 results/done 日志不得让续跑整体拒读。
+
+    追加写非原子:进程在写一行途中被杀会留下坏行。修复前 _all_records/
+    _load_done 逐行 json.loads,一行坏 → 续跑直接 JSONDecodeError。
+    """
+    cfg = ExperimentConfig.from_yaml(SMOKE_YAML)
+    cfg.stop = {"max_tasks": 50, "budget_usd": 0.10}
+    ledger = CostLedger({"m": {"input": 1.0, "output": 0.0}}, 1e9, tmp_path / "l.json")
+    runner = ExperimentRunner(cfg, tmp_path / "exp", ledger=ledger)
+
+    processed = {"n": 0}
+
+    async def handler(inst, task):
+        processed["n"] += 1
+        ledger.record("ep", "m", 50_000, experiment_id=cfg.experiment_id)
+        return {"success": True, "cost_usd": 0.05}
+
+    with pytest.raises(BudgetExhausted):
+        await runner.run(handler)
+
+    out = tmp_path / "exp" / cfg.experiment_id
+    with (out / "results.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"task_id": "t-999", "success": tr')   # 崩溃半行(无换行结尾)
+    with (out / "done.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"task_id": "t-9')
+
+    cfg.stop["budget_usd"] = 100.0
+    runner2 = ExperimentRunner(cfg, tmp_path / "exp", ledger=ledger)
+    result = await runner2.run(handler)                  # 修复前此处 JSONDecodeError
+    assert processed["n"] == 50                          # 任务不重不漏
+    rows = list(csv_rows(result["csv"]))
+    # 与坏行合并的第一条新记录随之不可解析而跳过(崩溃残留行无换行结尾的固有代价),
+    # 其余 49 条真记录全部保留;修复前是 0 条(整体拒读)。
+    assert len({r["task_id"] for r in rows}) == 49

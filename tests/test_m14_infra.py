@@ -239,3 +239,20 @@ async def test_resume_tolerates_corrupt_trailing_jsonl_line(tmp_path):
     # 与坏行合并的第一条新记录随之不可解析而跳过(崩溃残留行无换行结尾的固有代价),
     # 其余 49 条真记录全部保留;修复前是 0 条(整体拒读)。
     assert len({r["task_id"] for r in rows}) == 49
+
+
+async def test_empty_population_rejected_clearly(tmp_path):
+    """回归:空种群 + 有任务时清晰报配置错,而非 ZeroDivisionError(数值边界)。
+
+    触发路径:YAML 里 population: [] 且任务集非空 → 轮转分配
+    instances[idx % len(instances)] 即 idx % 0 → ZeroDivisionError。
+    """
+    cfg = ExperimentConfig.from_yaml(SMOKE_YAML)
+    cfg.population = []
+    runner = ExperimentRunner(cfg, tmp_path / "exp")
+
+    async def handler(inst, task):  # pragma: no cover - 不应被调
+        return {}
+
+    with pytest.raises(ValueError, match="population 为空"):
+        await runner.run(handler)

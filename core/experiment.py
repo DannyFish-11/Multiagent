@@ -206,6 +206,11 @@ class ExperimentRunner:
 
         done_ids = self._load_done()  # 续跑:跳过已完成任务
         instances = list(self._cfg.population)
+        if tasks and not instances:
+            # 空种群 + 有任务:轮转分配 idx % 0 会 ZeroDivisionError,显式拒绝
+            raise ValueError(
+                f"实验 {self._cfg.experiment_id} 的 population 为空:"
+                "有任务待注入时至少需要一个实例(检查 YAML population 配置)")
 
         for idx, task in enumerate(tasks):
             if task.task_id in done_ids:

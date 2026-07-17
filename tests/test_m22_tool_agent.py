@@ -236,6 +236,25 @@ def test_services_wires_tool_agent_when_autonomy_tools():
         assert r.status_code == 200 and "Benjamin" in r.json()["reply"]
 
 
+def test_services_llm_wrapped_with_concurrency_semaphore():
+    """M9.1 回归:服务入口自建 LLM 必须套并发信号量(此前只在 factory 装配路径有)。
+
+    echo 后端无函数调用能力:包裹后 hasattr(chat_tools) 仍为 False → 正确落到 MemoryAgent。
+    """
+    from fastapi.testclient import TestClient
+
+    from adapters.llm import ConcurrencyLimitedLLM
+    from services.api import create_app
+
+    cfg = load_config(llm={"mode": "echo"}, embedder={"backend": "fake"},
+                      vectordb={"mode": "memory"})
+    app = create_app(cfg)
+    with TestClient(app):
+        assert isinstance(app.state.llm, ConcurrencyLimitedLLM)
+        assert not hasattr(app.state.llm, "chat_tools")
+        assert type(app.state.agent).__name__ == "MemoryAgent"
+
+
 async def test_openai_adapter_chat_tools_parsing():
     """真实 OpenAICompatAdapter.chat_tools 解析 function-calling(MockTransport,零外呼)。"""
     import json

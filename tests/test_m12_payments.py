@@ -186,3 +186,23 @@ async def test_over_budget_payment_denied_by_policy(tmp_path):
 
 async def _ok():
     return {"ok": True}
+
+
+def test_payment_ledger_pruned_to_month_window(tmp_path):
+    """回归:支付台账明细不得随长跑无界增长(与 breaker._spend 同修法)。
+
+    修复前:reserve 只增不裁,内存与台账文件随时间无限膨胀(每次 reserve
+    全量重写 O(n))。修复后:落笔前裁掉月窗口(30 天)之外的明细——它们对
+    日/月累计本就不贡献;限额语义与持久化凭证(审计日志)不受影响。
+    """
+    import json
+    import time
+
+    ledger = PaymentLedger(tmp_path / "pay.json")
+    settings = PaymentsSettings(per_tx_usd=1000.0, daily_usd=1e9, monthly_usd=1e9)
+    ledger.reserve(5.0, settings)
+    ledger._txns[0]["ts"] = time.time() - 40 * 86400   # 模拟 40 天前的老交易
+    ledger.reserve(2.0, settings)                       # 落笔时触发裁剪
+    assert [t["amount_usd"] for t in ledger._txns] == [2.0]
+    assert [t["amount_usd"] for t in json.loads((tmp_path / "pay.json").read_text())] == [2.0]
+    assert ledger.month_total() == 2.0                  # 限额语义不变

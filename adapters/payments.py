@@ -29,6 +29,13 @@ class PaymentDenied(LayerError):
         super().__init__("L12", "payments", f"支付被拒绝: {reason}")
 
 
+# 台账明细只保留月窗口:日/月累计的最长回看即 30 天,更老的条目对限额判定
+# 不再贡献(完整交易凭证另见审计日志与卡商后台)。不裁剪则长跑进程的内存与
+# 台账文件无界增长,且每次 reserve 全量重写 O(n)。附带自愈:崩溃残留的孤儿
+# 预留(_pending 永不兑现)超过 30 天也会被清出,不再永久占额度。
+_MONTH_WINDOW_S = 30 * 86400
+
+
 class PaymentLedger:
     """单笔/日/月三层累计,并发安全,持久化挂 volume。"""
 
@@ -69,6 +76,9 @@ class PaymentLedger:
                 raise PaymentDenied(
                     f"月累计将达 ${self.month_total() + amount:.2f} > 上限 ${settings.monthly_usd:.2f}")
             rid = uuid.uuid4().hex
+            cutoff = time.time() - _MONTH_WINDOW_S
+            if any(t["ts"] < cutoff for t in self._txns):
+                self._txns = [t for t in self._txns if t["ts"] >= cutoff]
             self._txns.append({"ts": time.time(), "amount_usd": amount,
                                "_rid": rid, "_pending": True})
             self._save()

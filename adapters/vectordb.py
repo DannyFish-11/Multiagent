@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -33,12 +34,21 @@ class QdrantAdapter:
                 self._client = AsyncQdrantClient(location=":memory:")
         except Exception as exc:
             raise LayerError("L2", "qdrant", f"初始化失败(mode={settings.mode}): {exc}") from exc
+        # ensure_collection 的 exists→create 之间存在 await 点(server 模式为网络往返),
+        # 并发首用会双双看到 not-exists 并重复建集合 → 后者报 "already exists"。
+        # 进程内用锁串行化建集合窗口(共享同一 client 的 shared 池 adapter 亦同锁)。
+        self._ensure_lock = share_client_from._ensure_lock if share_client_from is not None \
+            else asyncio.Lock()
 
     @property
     def collection(self) -> str:
         return self._collection
 
     async def ensure_collection(self) -> None:
+        async with self._ensure_lock:
+            await self._ensure_collection_locked()
+
+    async def _ensure_collection_locked(self) -> None:
         from qdrant_client import models
 
         try:

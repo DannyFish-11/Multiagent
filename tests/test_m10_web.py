@@ -74,6 +74,43 @@ async def test_fetch_blacklisted_domain_blocked():
         await web(WebSettings(domain_blacklist=["evil.com"])).fetch("http://evil.com/x")
 
 
+async def test_fetch_redirect_to_blacklisted_domain_blocked():
+    """302 跳转绕过:入口 URL 合法,但跳转目标是黑名单域 → 必须被拦。"""
+    def handler(request):
+        if "good.com" in str(request.url):
+            return httpx.Response(302, headers={"location": "http://evil.com/landing"})
+        return httpx.Response(200, text="<html><body>不该被取回的内容</body></html>")
+
+    with pytest.raises(DomainBlocked):
+        await web(WebSettings(domain_blacklist=["evil.com"]), handler=handler).fetch("http://good.com/x")
+
+
+async def test_fetch_redirect_escapes_whitelist_blocked():
+    """白名单模式:白名单域 302 到非白名单域,同样被拦(白名单对最终落点生效)。"""
+    def handler(request):
+        if "trusted.com" in str(request.url):
+            return httpx.Response(302, headers={"location": "http://other.com/x"})
+        return httpx.Response(200, text="x")
+
+    with pytest.raises(DomainBlocked):
+        await web(WebSettings(domain_whitelist=["trusted.com"]), handler=handler) \
+            .fetch("http://trusted.com/x")
+
+
+async def test_fetch_relative_redirect_same_domain_ok():
+    """同域相对路径 301 正常跟随并取回正文。"""
+    html = "<html><head><title>T</title></head><body><article><p>跳转后的正文段落。" * 20 + \
+           "</p></article></body></html>"
+
+    def handler(request):
+        if str(request.url).endswith("/old"):
+            return httpx.Response(301, headers={"location": "/new"})
+        return httpx.Response(200, text=html)
+
+    result = await web(WebSettings(), handler=handler).fetch("http://good.com/old")
+    assert "跳转后的正文段落" in result["markdown"]
+
+
 # ---------------------------------------------------------------- 提示注入防御
 
 async def test_prompt_injection_wrapped_and_not_executed(tmp_path):
